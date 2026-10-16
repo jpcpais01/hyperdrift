@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Box3, Vector3 } from 'three';
 import { buildCarGeometry } from '../src/car/carBuilder';
 import { ALL_SLOTS, DEFAULT_BUILD, VISUAL_PARTS, optionsFor, randomBuild, sanitizeBuild, type CarBuild } from '../src/car/parts';
-import { SKELETON } from '../src/car/skeleton';
+import { skeletonFor, TRAVEL } from '../src/car/skeleton';
+import { shellPart } from '../src/car/geometry';
 import { computeStats, displayStats } from '../src/car/stats';
 
 function bounds(build: CarBuild) {
@@ -30,24 +31,23 @@ describe('car parts', () => {
         expect(b.nan, `${slot}:${o.id}`).toBe(false);
         expect(b.box.min.y, `${slot}:${o.id}`).toBeGreaterThan(0.05);
         expect(b.box.max.y, `${slot}:${o.id}`).toBeLessThan(1.9);
-        expect(Math.max(-b.box.min.x, b.box.max.x), `${slot}:${o.id}`).toBeLessThan(1.15);
-        expect(b.box.max.z, `${slot}:${o.id}`).toBeLessThan(2.5);
-        expect(b.box.min.z, `${slot}:${o.id}`).toBeGreaterThan(-2.5);
+        expect(Math.max(-b.box.min.x, b.box.max.x), `${slot}:${o.id}`).toBeLessThan(1.2);
+        expect(b.box.max.z, `${slot}:${o.id}`).toBeLessThan(2.55);
+        expect(b.box.min.z, `${slot}:${o.id}`).toBeGreaterThan(-2.55);
       }
     }
   }, 30000);
 
   it('wheels never pass through the body, for any body, front, rear and skirt, at full travel', () => {
-    // the tyre's envelope: radius plus the most upward travel we ever draw, across its width plus steering sweep
-    const reach = SKELETON.wheelRadius + SKELETON.travelUp;
     let n = 0;
     for (const body of VISUAL_PARTS.body) {
+      const K = skeletonFor(body.id);
       for (const front of VISUAL_PARTS.front) {
         for (const rear of VISUAL_PARTS.rear) {
           // every body x front x rear, cycling skirts and exhausts through them
           {
-            const skirts = VISUAL_PARTS.skirts[n % 3];
-            const exhaust = VISUAL_PARTS.exhaust[Math.floor(n++ / 3) % 3];
+            const skirts = VISUAL_PARTS.skirts[n % VISUAL_PARTS.skirts.length];
+            const exhaust = VISUAL_PARTS.exhaust[Math.floor(n++ / VISUAL_PARTS.skirts.length) % VISUAL_PARTS.exhaust.length];
             const { buckets } = buildCarGeometry({ ...DEFAULT_BUILD, body: body.id, front: front.id, rear: rear.id, skirts: skirts.id, exhaust: exhaust.id });
             for (const [bucket, list] of Object.entries(buckets)) {
               if (bucket === 'glass') continue;
@@ -55,10 +55,11 @@ describe('car parts', () => {
                 const pos = g.getAttribute('position');
                 for (let i = 0; i < pos.count; i++) {
                   const ax = Math.abs(pos.getX(i));
-                  if (ax < 0.62 || ax > 0.98) continue;
-                  for (const az of [SKELETON.frontAxleZ, SKELETON.rearAxleZ]) {
-                    const r = Math.hypot(pos.getY(i) - SKELETON.wheelY, pos.getZ(i) - az);
-                    expect(r, `${body.id}/${front.id}/${rear.id}/${skirts.id} ${bucket}`).toBeGreaterThan(reach);
+                  for (const a of [K.front, K.rear]) {
+                    // the tyre's envelope: radius plus the most upward travel we ever draw, across its width plus steering sweep
+                    if (ax < a.x - a.width / 2 - 0.09 || ax > a.x + a.width / 2 - 0.01) continue;
+                    const r = Math.hypot(pos.getY(i) - a.r, pos.getZ(i) - a.z);
+                    expect(r, `${body.id}/${front.id}/${rear.id}/${skirts.id} ${bucket}`).toBeGreaterThan(a.r + TRAVEL.up);
                   }
                 }
               }
@@ -74,30 +75,49 @@ describe('car parts', () => {
     for (const g of buckets.paint) expect(g.getAttribute('zone')).toBeTruthy();
   });
 
-  it('every front x headlight and rear x exhaust combination snaps onto the body', () => {
-    for (const front of VISUAL_PARTS.front) {
-      for (const lights of VISUAL_PARTS.headlights) {
-        const { buckets } = bounds({ ...DEFAULT_BUILD, front: front.id, headlights: lights.id });
-        // the light lenses must sit right on the nose surface
-        const box = new Box3();
-        for (const g of buckets.light) {
-          g.computeBoundingBox();
-          box.union(g.boundingBox!);
-        }
-        expect(box.max.z, `${front.id}/${lights.id}`).toBeGreaterThan(1.85);
-        expect(box.max.z, `${front.id}/${lights.id}`).toBeLessThan(2.35);
-      }
-    }
-    for (const rear of VISUAL_PARTS.rear) {
-      for (const ex of VISUAL_PARTS.exhaust) {
-        const { exhaustTips } = bounds({ ...DEFAULT_BUILD, rear: rear.id, exhaust: ex.id });
-        for (const t of exhaustTips) {
-          expect(t.z, `${rear.id}/${ex.id}`).toBeLessThan(-1.9);
-          expect(t.z, `${rear.id}/${ex.id}`).toBeGreaterThan(-2.4);
+  it('every front x headlight and rear x exhaust combination snaps onto every body', () => {
+    for (const body of VISUAL_PARTS.body) {
+      for (const front of VISUAL_PARTS.front) {
+        const tip = shellPart(body.id, front.id, DEFAULT_BUILD.rear).nose.tip;
+        for (const lights of VISUAL_PARTS.headlights) {
+          const { buckets } = bounds({ ...DEFAULT_BUILD, body: body.id, front: front.id, headlights: lights.id });
+          // the light lenses must sit right on the nose surface
+          const box = new Box3();
+          for (const g of buckets.light) {
+            g.computeBoundingBox();
+            box.union(g.boundingBox!);
+          }
+          const tag = `${body.id}/${front.id}/${lights.id}`;
+          expect(box.max.z, tag).toBeGreaterThan(tip - 0.42);
+          // rally spot lamps stand proud of the face on their pod
+          expect(box.max.z, tag).toBeLessThan(tip + 0.16);
         }
       }
+      for (const rear of VISUAL_PARTS.rear) {
+        const tip = shellPart(body.id, DEFAULT_BUILD.front, rear.id).tail.tip;
+        for (const ex of VISUAL_PARTS.exhaust) {
+          const { exhaustTips } = bounds({ ...DEFAULT_BUILD, body: body.id, rear: rear.id, exhaust: ex.id });
+          expect(exhaustTips.length).toBeGreaterThan(0);
+          for (const t of exhaustTips) {
+            const tag = `${body.id}/${rear.id}/${ex.id}`;
+            // out through the tail face, not buried in the body or floating behind it
+            expect(t.z, tag).toBeLessThan(tip + 0.3);
+            expect(t.z, tag).toBeGreaterThan(tip - 0.15);
+          }
+        }
+      }
     }
-  }, 30000);
+  }, 120000);
+
+  it('every body covers its tyres from above', () => {
+    for (const body of VISUAL_PARTS.body) {
+      const sh = shellPart(body.id, DEFAULT_BUILD.front, DEFAULT_BUILD.rear);
+      for (const a of [sh.K.front, sh.K.rear]) {
+        const x = sh.surface.sideX(a.r + a.arch + 0.01, a.z, 0);
+        expect(x, `${body.id} ${a.z}`).toBeGreaterThan(a.x + a.width / 2 - 0.03);
+      }
+    }
+  });
 
   it('random combinations always build, with valid options in every slot', () => {
     for (let seed = 0; seed < 25; seed++) {

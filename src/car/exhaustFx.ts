@@ -14,6 +14,7 @@ import {
   ShaderMaterial,
   UnsignedByteType,
   Vector3,
+  Vector4,
   type Camera,
 } from 'three';
 
@@ -25,7 +26,11 @@ import {
  * field shaped like a real jet (tight at the nozzle, swelling, then torn
  * apart at the tail), advected through a tiling 3D noise texture so the gas
  * visibly streams out, with a white-hot core, standing shock diamonds and
- * mild self-absorption so it has depth from every angle. Colour runs from
+ * mild self-absorption so it has depth from every angle. The burn is never
+ * steady: each pipe surges on a random envelope (big flaring bursts, low
+ * sputters where the gas breaks into separate chunks), ignition overshoots,
+ * and cutting the nitro blows a detached cloud off before the pipes crackle.
+ * Colour runs from
  * white-cyan through electric blue to violet for nitro, blue to orange for a
  * plain boost, and an orange fireball for overrun pops. Cost is a fixed 16
  * steps over the few pixels the jets cover, with two texture taps per step.
@@ -89,8 +94,10 @@ function noiseTexture(): Data3DTexture {
 const VERT = /* glsl */ `
   attribute vec3 aOrigin;
   attribute vec3 aCorner; // x, y in -1..1, z in 0..1 (along the jet)
-  attribute vec2 aInfo; // nozzle radius, seed
+  attribute vec3 aInfo; // nozzle radius, seed, tip index
   uniform float uLen;
+  uniform vec4 uSurge; // per-tip surge (1 = steady)
+  uniform float uDetach;
   uniform float uWidth;
   uniform float uIgnite;
   uniform float uPop;
@@ -100,11 +107,17 @@ const VERT = /* glsl */ `
   varying vec3 vBox; // half width, length, nozzle radius
   varying float vSeed;
   varying float vFloor;
+  varying float vSurge;
+  varying float vLen;
 
   void main() {
-    float r0 = aInfo.x * uWidth;
-    float H = r0 * (3.6 + uIgnite * 2.6 + uPop * 1.8) + 0.05;
-    float L = uLen * 1.08 + 0.1;
+    float s = dot(uSurge, vec4(equal(vec4(aInfo.z), vec4(0.0, 1.0, 2.0, 3.0))));
+    vSurge = s;
+    // a surge stretches the jet a lot and fattens it a little
+    vLen = uLen * (0.4 + 0.6 * s) * (1.0 + uDetach * 0.7);
+    float r0 = aInfo.x * uWidth * (0.78 + 0.22 * s);
+    float H = r0 * (4.0 + uIgnite * 2.6 + uPop * 1.8) + 0.05;
+    float L = vLen * 1.08 + 0.1;
     // jet space: x/y across, +z out of the nozzle (the car's -z)
     vec3 pj = vec3(aCorner.xy * H, aCorner.z * L - 0.04);
     vPos = pj;
@@ -126,11 +139,14 @@ const FRAG = /* glsl */ `
   uniform float uNitro;
   uniform float uPop;
   uniform float uIgnite;
+  uniform float uDetach;
   varying vec3 vPos;
   varying vec3 vCam;
   varying vec3 vBox;
   varying float vSeed;
   varying float vFloor; // nozzle height above the road
+  varying float vSurge;
+  varying float vLen;
 
   float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -169,9 +185,14 @@ const FRAG = /* glsl */ `
     float ds = (tf - tn) / float(${STEPS});
     float jitter = hash(gl_FragCoord.xy + vSeed * 17.0);
     float r0 = vBox.z;
-    float L = max(uLen, 0.05);
-    float k = 0.32 / r0; // emission per metre, normalised to the nozzle size
-    float spacing = 0.26 + 0.07 * L;
+    float L = max(vLen, 0.05);
+    float sg = vSurge;
+    // emission per metre, normalised to the nozzle size; bursts burn hotter, sputters dimmer
+    float k = 0.32 / r0 * (0.4 + 0.6 * sg);
+    // more pressure pushes the shock diamonds further apart
+    float spacing = (0.26 + 0.07 * L) * (0.8 + 0.2 * sg);
+    // a low surge chokes the flow: the jet breaks up into separate puffs
+    float choke = clamp((0.95 - sg) * 1.6, 0.0, 1.0);
     vec3 acc = vec3(0.0);
     float T = 1.0;
     for (int i = 0; i < ${STEPS}; i++) {
@@ -186,6 +207,8 @@ const FRAG = /* glsl */ `
       vec2 q = p.xy - c;
       float r = r0 * (1.0 + 2.3 * tzc) * (1.0 - 0.6 * smoothstep(0.55, 1.0, tzc));
       r *= 1.0 + uIgnite * 2.2 * (1.0 - tzc) + uPop * 1.4;
+      // pressure waves travelling down the plume make it bulge and pinch
+      r *= 1.0 + 0.2 * tzc * sin(z * 5.0 - uTime * 31.0 + vSeed * 9.0);
       float d = length(q) / r;
       if (d > 1.7) continue;
       // gas streaming out of the nozzle: noise advected along +z
@@ -197,6 +220,13 @@ const FRAG = /* glsl */ `
       float dens = 1.0 - smoothstep(0.25, 1.0, edge);
       dens *= 1.0 - smoothstep(0.62, 1.05, tzc + (n - 0.5) * 0.45);
       dens *= smoothstep(-0.02, 0.04, z);
+      // gas chunks shooting out: mild in the tail always, the whole jet when it sputters
+      float band = 0.5 + 0.5 * sin(z * 9.0 - uTime * 44.0 + vSeed * 11.0 + n * 4.0);
+      float brk = max(choke * smoothstep(0.0, 0.2, tzc), 0.45 * smoothstep(0.35, 0.9, tzc));
+      dens *= mix(1.0, smoothstep(0.3, 0.75, band), brk);
+      // nitro cut: the last cloud flies off and leaves the nozzle dark behind it
+      float cutZ = uDetach * L * 0.95;
+      dens *= 1.0 - (1.0 - smoothstep(cutZ - 0.05, cutZ + 0.25, z)) * step(0.001, uDetach);
       // soft contact with the road: the gas thins out as it nears the deck instead of being cut by it
       dens *= smoothstep(0.0, 0.16, p.y + vFloor);
       if (dens <= 0.001) continue;
@@ -205,7 +235,7 @@ const FRAG = /* glsl */ `
       float wave = max(0.5 + 0.5 * cos(6.2831 * z / spacing - 1.2), 0.0);
       float dia = pow(wave, 10.0) * exp(-d * d * 7.0) * (1.0 - smoothstep(0.05, 0.7, tzc)) * uNitro;
       float ign = uIgnite * exp(-(d * d + tzc * tzc * 30.0) * 1.5);
-      float heat = clamp(core * 1.05 + dia * 1.3 + (1.0 - tzc) * 0.22 + ign, 0.0, 1.5);
+      float heat = clamp((core * 1.05 + dia * 1.3) * (0.75 + 0.25 * sg) + (1.0 - tzc) * 0.22 + ign, 0.0, 1.5);
       vec3 e = palette(heat) * dens * (0.45 + 1.15 * n) + vec3(1.6, 1.9, 2.4) * (dia * 2.4 + ign * 2.0) * dens;
       acc += T * e * (k * ds);
       T *= exp(-dens * ds * 5.0);
@@ -247,7 +277,7 @@ function jetGeometry(tips: Vector3[]): BufferGeometry {
     for (let i = 0; i < 8; i++) {
       origin.push(tip.x, tip.y, tip.z);
       corner.push(BOX[i * 3], BOX[i * 3 + 1], BOX[i * 3 + 2]);
-      info.push(r, k * 0.37 + 0.11);
+      info.push(r, k * 0.37 + 0.11, k % 4);
     }
     // jet space flips z, which mirrors the box: swap the winding back
     for (let i = 0; i < BOX_TRIS.length; i += 3) index.push(base + BOX_TRIS[i], base + BOX_TRIS[i + 2], base + BOX_TRIS[i + 1]);
@@ -257,7 +287,7 @@ function jetGeometry(tips: Vector3[]): BufferGeometry {
   g.setAttribute('position', new BufferAttribute(new Float32Array(origin), 3));
   g.setAttribute('aOrigin', new BufferAttribute(new Float32Array(origin), 3));
   g.setAttribute('aCorner', new BufferAttribute(new Float32Array(corner), 3));
-  g.setAttribute('aInfo', new BufferAttribute(new Float32Array(info), 2));
+  g.setAttribute('aInfo', new BufferAttribute(new Float32Array(info), 3));
   g.setIndex(index);
   return g;
 }
@@ -269,10 +299,25 @@ const _inv = new Matrix4();
 export class ExhaustFx {
   readonly flames: Mesh;
   readonly glow: Mesh;
+  /** how hard the nitro is surging right now (1 = steady); the camera and screen ride it */
+  surge = 1;
+  /** jumps up when a big burst kicks in; whoever reads it decays it */
+  kick = 0;
   private mat: ShaderMaterial;
   private glowMat: ShaderMaterial;
   private popEnv = 0;
   private igniteEnv = 0;
+  // the shared surge (the whole bottle pulsing) and each pipe's own wobble on top
+  private master = 1;
+  private masterTarget = 1;
+  private masterTimer = 0;
+  private tipVal = [1, 1, 1, 1];
+  private tipTarget = [1, 1, 1, 1];
+  private tipTimer = [0, 0, 0, 0];
+  private detach = 0;
+  private crackles: { t: number; s: number }[] = [];
+  private fired: number[] = [];
+  private glowZ = 0;
 
   constructor(readonly tips: Vector3[]) {
     this.mat = new ShaderMaterial({
@@ -291,6 +336,8 @@ export class ExhaustFx {
         uNitro: { value: 0 },
         uPop: { value: 0 },
         uIgnite: { value: 0 },
+        uDetach: { value: 0 },
+        uSurge: { value: new Vector4(1, 1, 1, 1) },
         uCamLocal: { value: new Vector3() },
       },
     });
@@ -316,8 +363,8 @@ export class ExhaustFx {
       uniforms: { uGlow: { value: 0 }, uColor: { value: new Color() } },
     });
     this.glow = new Mesh(gg, this.glowMat);
-    const z = tips.length ? Math.min(...tips.map((t) => t.z)) : -2.2;
-    this.glow.position.set(0, 0.04, z - 1.4);
+    this.glowZ = tips.length ? Math.min(...tips.map((t) => t.z)) : -2.2;
+    this.glow.position.set(0, 0.04, this.glowZ - 1.4);
     this.glow.visible = false;
     this.glow.renderOrder = 1;
   }
@@ -327,31 +374,113 @@ export class ExhaustFx {
     this.popEnv = Math.max(this.popEnv, strength);
   }
 
-  /** The nitro has just been lit. */
+  /** The nitro has just been lit: it flares way past its steady size first. */
   ignite() {
     this.igniteEnv = 1;
+    this.master = Math.max(this.master, 1.3);
+    this.masterTarget = 2.2;
+    this.masterTimer = 0.28;
+    this.kick = 1;
+  }
+
+  /** The nitro has been shut off: the last cloud blows away, then the hot pipes crackle. */
+  cutoff() {
+    this.detach = 0.001;
+    this.popEnv = Math.max(this.popEnv, 0.5);
+    const n = 2 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < n; i++) this.crackles.push({ t: 0.36 + Math.random() * 0.6, s: 0.4 + Math.random() * 0.55 });
+  }
+
+  /** Backfires the jets fired on their own since the last call (for sound and sparks). */
+  takePops(): number[] {
+    if (!this.fired.length) return this.fired;
+    const out = this.fired;
+    this.fired = [];
+    return out;
+  }
+
+  private stepSurge(dt: number, live: boolean) {
+    if (!live) {
+      this.master += (1 - this.master) * (1 - Math.exp(-6 * dt));
+      for (let i = 0; i < 4; i++) this.tipVal[i] = this.master;
+      return;
+    }
+    this.masterTimer -= dt;
+    if (this.masterTimer <= 0) {
+      const r = Math.random();
+      if (r < 0.14) {
+        // sputter: the flow chokes for a moment
+        this.masterTarget = 0.12 + Math.random() * 0.2;
+        this.masterTimer = 0.05 + Math.random() * 0.1;
+      } else if (r < 0.34) {
+        // a big burst
+        this.masterTarget = 1.5 + Math.random() * 0.6;
+        this.masterTimer = 0.12 + Math.random() * 0.22;
+        this.kick = Math.max(this.kick, this.masterTarget - 1);
+      } else {
+        this.masterTarget = 0.55 + Math.random() * 0.8;
+        this.masterTimer = 0.07 + Math.random() * 0.25;
+      }
+    }
+    // bursts slam in, then sag back
+    const rate = this.masterTarget > this.master ? 24 : 10;
+    this.master += (this.masterTarget - this.master) * (1 - Math.exp(-rate * dt));
+    for (let i = 0; i < 4; i++) {
+      this.tipTimer[i] -= dt;
+      if (this.tipTimer[i] <= 0) {
+        this.tipTarget[i] = 0.72 + Math.random() * 0.56;
+        this.tipTimer[i] = 0.04 + Math.random() * 0.12;
+      }
+      const t = this.master * this.tipTarget[i];
+      this.tipVal[i] += (t - this.tipVal[i]) * (1 - Math.exp(-28 * dt));
+    }
   }
 
   /** boost and nitro are the smoothed 0..1 intensities. */
   update(dt: number, time: number, boost: number, nitro: number) {
     this.popEnv *= Math.exp(-dt * 16);
-    this.igniteEnv *= Math.exp(-dt * 7);
+    this.igniteEnv *= Math.exp(-dt * 6);
+    for (let i = this.crackles.length - 1; i >= 0; i--) {
+      const c = this.crackles[i];
+      c.t -= dt;
+      if (c.t <= 0) {
+        this.pop(c.s);
+        this.fired.push(c.s);
+        this.crackles.splice(i, 1);
+      }
+    }
+    if (this.detach > 0) {
+      this.detach += dt / 0.32;
+      if (this.detach >= 1) this.detach = 0;
+    }
+    this.stepSurge(dt, nitro > 0.05 || boost > 0.05);
+    // how much the random surging shows: all of it under nitro, a touch on a plain boost
+    const wild = Math.min(1, nitro * 1.2 + boost * 0.35);
+    const sv = this.mat.uniforms.uSurge.value as Vector4;
+    const s = (i: number) => 1 + (this.tipVal[i] - 1) * wild;
+    sv.set(s(0), s(1), s(2), s(3));
+    this.surge = 1 + (this.master - 1) * wild;
     const pop = this.popEnv;
     const u = this.mat.uniforms;
     const intensity = Math.min(1.2, Math.max(boost, nitro * 1.15, pop * 0.9));
-    const flicker = 0.88 + 0.12 * Math.sin(time * 61) * Math.sin(time * 23 + 1);
+    const flicker = 0.84 + 0.16 * Math.sin(time * 61) * Math.sin(time * 23 + 1);
     // wrap the clock so texture coordinates keep their precision in long sessions
     u.uTime.value = time % 200;
     u.uIntensity.value = intensity * flicker;
     u.uNitro.value = Math.min(1, nitro * 1.2);
     u.uPop.value = Math.min(1, pop * 1.2);
     u.uIgnite.value = this.igniteEnv * nitro;
-    u.uLen.value = (0.25 + boost * 1.0 + nitro * 1.55 + pop * 0.55 + this.igniteEnv * nitro * 0.8) * (0.94 + 0.06 * Math.sin(time * 37));
+    u.uDetach.value = this.detach;
+    u.uLen.value = (0.25 + boost * 1.0 + nitro * 1.55 + pop * 0.55 + this.igniteEnv * nitro * 1.1) * (0.94 + 0.06 * Math.sin(time * 37));
     u.uWidth.value = 1 + nitro * 0.25;
     this.flames.visible = intensity > 0.01;
-    const glow = Math.max(nitro, boost * 0.6, pop * 0.4);
-    this.glowMat.uniforms.uGlow.value = glow * 0.85 * flicker * (1 + this.igniteEnv);
+    // the light on the road breathes with the surges and flashes on ignition
+    const glow = Math.max(nitro * (0.45 + 0.55 * this.surge), boost * 0.6, pop * 0.4);
+    this.glowMat.uniforms.uGlow.value = glow * 0.85 * flicker * (1 + this.igniteEnv * 1.6);
     this.glowMat.uniforms.uColor.value.copy(BOOST_GLOW).lerp(NITRO_GLOW, Math.min(1, nitro * 1.5 + 0.2 * (1 - pop)));
+    const stretch = 1 + nitro * (0.1 + 0.3 * (Math.min(2, this.surge) - 1) + this.igniteEnv * 0.3);
+    this.glow.scale.set(1, 1, stretch);
+    this.glow.position.z = this.glowZ - 1.4 * stretch;
     this.glow.visible = glow > 0.01;
   }
 

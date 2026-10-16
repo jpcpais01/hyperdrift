@@ -415,6 +415,7 @@ const SLOT_HINTS: Partial<Record<Slot, string>> = {
   exhaust: 'Saídas de escape',
   paint: 'Cor por zona do carro',
   vinyl: 'Padrão e cor',
+  underglow: 'Luzes LED por baixo do carro',
   engine: 'Velocidade e aceleração',
   turbo: 'Força em baixa ou alta',
   nitro: 'Força e duração do boost',
@@ -443,6 +444,7 @@ const SLOT_ICONS: Partial<Record<Slot, string>> = {
   paint: g('<path d="M4 20c4 0 4-3 4-5l9-9a2 2 0 0 1 3 3l-9 9c-2 0-5 0-5 4z"/>'),
   vinyl: g('<path d="M3 17 9 7h4l-6 10zM11 17l6-10h4l-6 10z"/>'),
   vinylColor: g('<circle cx="12" cy="12" r="8"/>'),
+  underglow: g('<path d="M3 13v-2l3-1 3-3.5h6L18 10l3 1v2z"/><path d="M5 17h14M3 20.5h3M9.5 20.5h5M18 20.5h3"/>'),
   engine: g('<path d="M4 9h3l1-2h6l1 2h3l2 3v4l-2 2H7l-3-3z"/><path d="M10 11v4M13 11v4"/>'),
   turbo: g('<circle cx="12" cy="12" r="8"/><path d="M12 4c-2 4 0 8 0 8s4-2 8 0M12 20c2-4 0-8 0-8s-4 2-8 0"/>'),
   nitro: g('<path d="M9 3h6M10 3v3h4V3M8 8h8v12H8z"/><path d="M13 10l-3 4h3l-2 4"/>'),
@@ -621,7 +623,8 @@ export class GarageScreen {
     const subs = SUB_SLOTS[slot as keyof typeof SUB_SLOTS] ?? INTERIOR_SUB_SLOTS[slot as keyof typeof INTERIOR_SUB_SLOTS];
     const main = optionsFor(slot).find((o) => o.id === this.build[slot]);
     const dots = (subs ?? [{ slot }]).map((s) => this.swatchOf(s.slot, this.build[s.slot])).filter((x): x is string => !!x);
-    const uniq = [...new Set(dots)].slice(0, 4);
+    // lights that are off have no colour to show
+    const uniq = slot === 'underglow' && this.build.underglow === 'none' ? [] : [...new Set(dots)].slice(0, 4);
     return { name: main?.name ?? '', dots: uniq };
   }
 
@@ -730,7 +733,7 @@ export class GarageScreen {
       return null;
     }
     if (slot === 'vinylColor' && id === 'auto') return '#' + paintById(this.build.paint).accent.toString(16).padStart(6, '0');
-    if (slot === 'rimColor' && id === 'body') return paintById(this.build.paint).swatch ?? null;
+    if ((slot === 'rimColor' && id === 'body') || (slot === 'underglowColor' && id === 'paint')) return paintById(this.build.paint).swatch ?? null;
     return o.swatch;
   }
 

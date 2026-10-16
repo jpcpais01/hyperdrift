@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  Vector2,
   Vector3,
   Vector4,
   CanvasTexture,
@@ -121,6 +122,17 @@ export interface PaintLayout {
   hoodEnd: number;
   /** door shut lines (front, rear) and the fuel filler's z */
   doors?: [number, number, number];
+  /** height span of the door lines and the fuel filler's height */
+  doorY?: [number, number, number];
+  /** z of the front and rear bumper splits */
+  ends?: [number, number];
+  /** wheel arches: centre height, axle z and opening radius */
+  archF?: [number, number, number];
+  archR?: [number, number, number];
+  /** body height against the base car (vinyls follow it) */
+  lift?: number;
+  /** x of the wheel-well walls */
+  wellX?: number;
 }
 
 function hashBuild(b: CarBuild): number {
@@ -139,6 +151,10 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
     uHood: { value: new Vector4(layout.hoodStart, layout.hoodEnd, 0.6, 0.6) },
     uNumber: { value: 7 },
     uDoor: { value: new Vector3(...(layout.doors ?? [0.84, -0.64, -0.98])) },
+    uDoorY: { value: new Vector3(...(layout.doorY ?? [0.3, 0.92, 0.72])) },
+    uEnds: { value: new Vector2(...(layout.ends ?? [1.78, -1.78])) },
+    uArchF: { value: new Vector4(...(layout.archF ?? [0.34, 1.32, 0.405]), layout.wellX ?? 0.5) },
+    uArchR: { value: new Vector4(...(layout.archR ?? [0.34, -1.3, 0.405]), layout.lift ?? 0) },
   };
   // clearcoat on the material switches the clearcoat code path on; each zone then sets its own amount
   const paint = new MeshPhysicalMaterial({ clearcoat: 1, clearcoatRoughness: 0.06, roughness: 0.3, metalness: 0.5 });
@@ -152,7 +168,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nfloat paintClearcoat = 1.0;\npaintSurface(diffuseColor.rgb, metalnessFactor, roughnessFactor, paintClearcoat, normal, normalize(vViewPosition));')
       .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_CLEARCOAT\nmaterial.clearcoat *= paintClearcoat;\n#endif');
   };
-  paint.customProgramCacheKey = () => 'hyperdrift-paint-v3';
+  paint.customProgramCacheKey = () => 'hyperdrift-paint-v4';
 
   const rim = new MeshStandardMaterial({ color: 0xd5dae0, roughness: 0.22, metalness: 1 });
   const tail = new MeshBasicMaterial({ color: new Color(1.6, 0.05, 0.08) });
@@ -213,7 +229,14 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
         rim.metalness = rc.id === 'white' ? 0.2 : rc.id === 'black' ? 0.6 : 0.95;
         rim.roughness = rc.id === 'black' ? 0.18 : 0.26;
       } else {
-        const stock = b.rims === 'mesh' ? [0x3a3e44, 0.9, 0.35] : b.rims === 'turbine' ? [0xf2f2f2, 0.2, 0.3] : [0xd5dae0, 1, 0.22];
+        const STOCK: Record<string, [number, number, number]> = {
+          mesh: [0x3a3e44, 0.9, 0.35],
+          turbine: [0xf2f2f2, 0.2, 0.3],
+          dish: [0xe8ecf0, 1, 0.12],
+          rally: [0xf4f4f2, 0.15, 0.4],
+          blade: [0x8a6a3a, 0.9, 0.28],
+        };
+        const stock = STOCK[b.rims] ?? [0xd5dae0, 1, 0.22];
         rim.color.setHex(stock[0]);
         rim.metalness = stock[1];
         rim.roughness = stock[2];

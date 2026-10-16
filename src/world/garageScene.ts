@@ -212,6 +212,13 @@ export class GarageScene {
   }
 
   private updatePreview(dt: number, time: number) {
+    const ug = this.car?.underglow;
+    if (ug) {
+      // a slow throttle sweep so the reactive effect shows what it does on the turntable
+      const showing = this.focus === 'underglow' || this.focus === 'underglowColor';
+      ug.boost += ((showing ? 1.4 : 1) - ug.boost) * (1 - Math.exp(-3 * dt));
+      ug.update(dt, time, { speed: 0.5 - 0.5 * Math.cos(time * 0.6), nitro: this.demo?.nitroFx ?? 0, drifting: false, grounded: true });
+    }
     const d = this.demo;
     if (!d) {
       this.car?.exhaust?.update(dt, time, 0, 0);
@@ -226,6 +233,11 @@ export class GarageScene {
       this.car?.exhaust?.ignite();
       audio.nitroStart('garage');
     }
+    if (!nitroOn && d.lit && d.nitroFx > 0.5) {
+      d.lit = false;
+      this.car?.exhaust?.cutoff();
+      audio.pop('garage', 0.45);
+    }
     d.nitroFx += ((nitroOn ? 1 : 0) - d.nitroFx) * (1 - Math.exp(-(nitroOn ? 14 : 4) * dt));
     d.dt.step(dt, { speed: 0, topSpeed: 70, throttle, grounded: false, spin: 0 });
     for (const e of d.dt.events) {
@@ -234,7 +246,9 @@ export class GarageScene {
       audio.pop('garage', e.strength);
     }
     d.dt.events.length = 0;
-    audio.updateVoice('garage', { rpm: d.dt.rpm, throttle, nitro: d.nitroFx, limiter: d.dt.limiter, cut: false, gain: t > 3.4 ? 0 : 1 }, dt);
+    for (const s of this.car?.exhaust?.takePops() ?? []) audio.pop('garage', s);
+    const surge = this.car?.exhaust?.surge ?? 1;
+    audio.updateVoice('garage', { rpm: d.dt.rpm, throttle, nitro: d.nitroFx * Math.max(0.62, Math.min(1.35, 0.62 + 0.38 * surge)), limiter: d.dt.limiter, cut: false, gain: t > 3.4 ? 0 : 1 }, dt);
     this.car?.exhaust?.update(dt, time, 0, d.nitroFx);
     if (t > 3.8) this.stopPreview();
   }
