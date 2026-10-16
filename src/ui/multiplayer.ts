@@ -45,6 +45,12 @@ export class MultiplayerScreen {
   onGarage: (() => void) | null = null;
   onLeave: (() => void) | null = null;
   onResume: (() => void) | null = null;
+  /** host: open the drift zone for the whole room */
+  onZone: (() => void) | null = null;
+  /** drop into the room's open drift zone */
+  onEnterZone: (() => void) | null = null;
+  /** what of mine is still running behind the lobby */
+  private live: 'race' | 'zone' | null = null;
 
   constructor(root: HTMLElement, name: string) {
     this.el = document.createElement('div');
@@ -135,6 +141,12 @@ export class MultiplayerScreen {
           break;
         case 'leave':
           this.onLeave?.();
+          break;
+        case 'zone':
+          this.onZone?.();
+          break;
+        case 'enterzone':
+          this.onEnterZone?.();
           break;
         case 'resume':
           this.onResume?.();
@@ -234,10 +246,13 @@ export class MultiplayerScreen {
     if (!room && this.view === 'lobby') this.setView('home');
   }
 
-  /** Redraw the lobby (roster changed). `racing`: an online race of mine is still on behind the lobby. */
-  renderLobby(racing = false) {
+  /** Redraw the lobby (roster changed). `live`: an online race or zone of mine is still on behind the lobby. */
+  renderLobby(live: 'race' | 'zone' | null = this.live) {
+    this.live = live;
     const room = this.room;
     if (!room || this.view !== 'lobby') return;
+    const racing = live === 'race';
+    const zoneOpen = room.session?.kind === 'zone';
     const slots: string[] = [];
     for (let i = 0; i < MAX_PLAYERS; i++) {
       const p = room.players[i];
@@ -255,9 +270,13 @@ export class MultiplayerScreen {
     const inSession = !!room.session && room.session.at < room.hostNow();
     const banner = racing
       ? '<button class="mp-banner live" data-a="resume">Corrida a decorrer · <b>voltar à pista</b></button>'
-      : inSession && !room.isHost
-        ? '<p class="mp-banner">Corrida a decorrer · entras na próxima</p>'
-        : '';
+      : live === 'zone'
+        ? '<button class="mp-banner live zone" data-a="resume">Zona livre a decorrer · <b>voltar à zona</b></button>'
+        : zoneOpen
+          ? '<button class="mp-banner live zone" data-a="enterzone">Zona livre aberta · <b>entrar</b></button>'
+          : inSession && !room.isHost
+            ? '<p class="mp-banner">Corrida a decorrer · entras na próxima</p>'
+            : '';
     this.lobbyEl.innerHTML = `
       <div class="mp-lobby-top">
         <div class="mp-room">
@@ -274,6 +293,7 @@ export class MultiplayerScreen {
         ${
           room.isHost
             ? `<button class="mp-toggle ${room.settings.bots ? 'on' : ''}" data-a="bots"><i></i>Rivais IA</button>
+               ${zoneOpen ? '' : '<button class="btn small mp-zone" data-a="zone">Zona livre</button>'}
                <button class="btn primary mp-start" data-a="start">${racing ? 'Nova corrida' : 'Começar corrida'} ›</button>`
             : '<p class="mp-wait"><span class="mp-dots"><i></i><i></i><i></i></span>À espera que o anfitrião comece</p>'
         }

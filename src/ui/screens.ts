@@ -18,7 +18,7 @@ import { checkAndReload, onUpdatePhase, type UpdatePhase } from '../core/updater
 import { TILT_LOCK_DEG, TILT_SENS_LABELS, type TiltSens } from '../core/tilt';
 import { LAPS, type RaceResult } from '../game/race';
 import { MAX_PLAYERS } from '../net/protocol';
-import { formatTime } from './hud';
+import { formatScore, formatTime } from './hud';
 import { hint, nav } from './nav';
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''): HTMLElementTagNameMap[K] {
@@ -41,7 +41,7 @@ const UPDATE_LABELS: Record<UpdatePhase, string> = {
   reloading: 'A recarregar…',
 };
 
-type MenuMode = 'race' | 'online' | 'tt' | 'garage';
+type MenuMode = 'race' | 'online' | 'tt' | 'zone' | 'garage';
 
 interface ModeInfo {
   id: MenuMode;
@@ -58,6 +58,7 @@ const ART = {
   race: `<svg viewBox="0 0 64 64"><path class="pole" d="M14 58V7"/><path class="flag" d="M16 9c8-4 14 4 22 0s10-3 14-1v24c-4-2-6-3-14 1s-14-4-22 0z"/><path class="chk" d="M16 9v8c4-2 7-1 10 0V9c-3-1-6-2-10 0zM26 17v8c4 1 8 1 12 0v-8c-4 1-8 1-12 0zM38 9v8c5-2 9-3 14-1V8c-5-2-9-1-14 1zM16 25v7c4-2 7-1 10 0v-7c-3-1-6-2-10 0zM38 25v7c5-2 9-3 14-1v-7c-5-2-9-1-14 1z"/></svg>`,
   online: `<svg viewBox="0 0 64 64"><circle class="ring" cx="32" cy="32" r="24"/><path class="ring" d="M8 32h48M32 8c-8 8-10 16-10 24s2 16 10 24M32 8c8 8 10 16 10 24s-2 16-10 24"/><circle class="dot" cx="14" cy="20" r="5"/><circle class="dot" cx="50" cy="20" r="5"/><circle class="dot" cx="32" cy="54" r="5"/></svg>`,
   tt: `<svg viewBox="0 0 64 64"><circle class="ring" cx="32" cy="36" r="21"/><path class="ring" d="M26 6h12M32 6v9M49 17l4-4"/><path class="hand" d="M32 36 43 25"/><path class="ghost" d="M10 36a22 22 0 0 1 3-11" /><circle class="dot" cx="32" cy="36" r="3.5"/></svg>`,
+  zone: `<svg viewBox="0 0 64 64"><path class="ring" d="M7 29c0-5 11-9 25-9s25 4 25 9-11 9-25 9S7 34 7 29z"/><path class="ring" d="M9 32l11 13 8 3 4 9 5-8 9-4 10-13"/><path class="ghost" d="M16 29c7 4 19 4 23-1s-3-8-9-6"/><path class="hand" d="M47 25V14"/><circle class="dot" cx="47" cy="11" r="5.5"/><circle class="dot" cx="41" cy="15" r="3.5"/></svg>`,
   garage: `<svg viewBox="0 0 64 64"><path class="ring" d="M6 40c0-5 3-8 8-9l8-9c2-2 4-3 7-3h10c3 0 5 1 7 3l6 8c6 1 9 4 9 10v4H6z"/><path class="ring" d="M22 31h28M33 22v9"/><circle class="dot" cx="18" cy="44" r="6"/><circle class="dot" cx="46" cy="44" r="6"/><path class="hand" d="M40 58l9-9m-2-2 6 6"/></svg>`,
 };
 
@@ -65,6 +66,7 @@ const MODES: ModeInfo[] = [
   { id: 'race', name: 'Corrida', kicker: `Grande Prémio · ${LAPS} voltas`, desc: 'Enfrenta 3 rivais montados peça a peça numa pista suspensa no céu. Drifta, voa e queima nitro até à meta.', cta: 'Correr', c1: '#29e0ff', c2: '#6a5bff', art: ART.race },
   { id: 'online', name: 'Multijogador', kicker: `Online · até ${MAX_PLAYERS} pilotos`, desc: 'Cria uma sala, partilha o código de 4 números e corre contra os teus amigos. Os lugares vazios enchem-se de IA.', cta: 'Entrar', c1: '#ff3fb4', c2: '#ff8a3d', art: ART.online },
   { id: 'tt', name: 'Contrarrelógio', kicker: 'Sozinho · contra o fantasma', desc: 'Só tu, a pista e o fantasma da tua melhor volta. Cada décima conta.', cta: 'Começar', c1: '#7dff9e', c2: '#18b6a4', art: ART.tt },
+  { id: 'zone', name: 'Zona livre', kicker: 'Drift livre · Jardim Celeste', desc: 'Uma ilha-jardim a flutuar nas nuvens, sem voltas nem relógio. Encadeia drifts, salta as rampas e persegue o teu melhor combo. Online, abre a zona para a tua sala.', cta: 'Explorar', c1: '#ff8ee0', c2: '#3fd6a0', art: ART.zone },
   { id: 'garage', name: 'Garagem', kicker: 'Personalização', desc: 'Carroçaria, jantes, pintura, interior, motor, turbo e pneus. Cada peça muda o visual e a condução.', cta: 'Abrir garagem', c1: '#ffcf3f', c2: '#ff5a3d', art: ART.garage },
 ];
 
@@ -124,6 +126,7 @@ export class MenuScreen {
   onRace: (() => void) | null = null;
   onTimeTrial: (() => void) | null = null;
   onGarage: (() => void) | null = null;
+  onZone: (() => void) | null = null;
   onOnline: (() => void) | null = null;
   onToggleSound: (() => boolean) | null = null;
   onControls: (() => void) | null = null;
@@ -136,6 +139,7 @@ export class MenuScreen {
   private hero: HTMLElement;
   private record: number | null = null;
   private stats: DisplayStats | null = null;
+  private bestDrift = 0;
 
   constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null, resolutionLabel: string) {
     this.el = h('div', 'screen menu hidden');
@@ -162,7 +166,7 @@ export class MenuScreen {
         </header>
         <nav class="tiles">${MODES.map(
           (m, i) =>
-            `<button class="tile" data-mode="${m.id}" style="--c1:${m.c1};--c2:${m.c2};--i:${i}"><span class="tile-art">${m.art}</span><span class="tile-name">${m.name}</span></button>`,
+            `<button class="tile" data-mode="${m.id}" style="--c1:${m.c1};--c2:${m.c2};--i:${i}"><span class="tile-art">${m.art}</span><span class="tile-name">${m.name}</span>${m.id === 'zone' ? '<em class="tile-new">Novo</em>' : ''}</button>`,
         ).join('')}</nav>
         <section class="hero" aria-live="polite"></section>
         <footer class="menu-hints">${hint('move', 'Navegar')}${hint('ok', 'Selecionar')}</footer>
@@ -316,6 +320,7 @@ export class MenuScreen {
     if (m === 'tt') this.onTimeTrial?.();
     if (m === 'garage') this.onGarage?.();
     if (m === 'online') this.onOnline?.();
+    if (m === 'zone') this.onZone?.();
   }
 
   private renderHero(anim: boolean) {
@@ -327,6 +332,10 @@ export class MenuScreen {
       extra = `<div class="hero-meta"><span class="chip"><b>${LAPS}</b> voltas</span>${
         m.id === 'race' ? '<span class="chip"><b>3</b> rivais IA</span>' : '<span class="chip">Fantasma</span>'
       }${this.record !== null ? `<span class="chip rec">Recorde <b>${formatTime(this.record)}</b></span>` : ''}</div>`;
+    } else if (m.id === 'zone') {
+      extra = `<div class="hero-meta"><span class="chip">Sem voltas</span><span class="chip">Combos até <b>×5</b></span>${
+        this.bestDrift > 0 ? `<span class="chip rec">Recorde <b>${formatScore(this.bestDrift)}</b></span>` : ''
+      }</div>`;
     } else if (m.id === 'online') {
       extra = `<div class="hero-meta"><span class="chip"><b>${MAX_PLAYERS}</b> pilotos</span><span class="chip">Código de 4 números</span><span class="chip">Convite por link</span></div>`;
     } else if (this.stats) {
@@ -347,10 +356,11 @@ export class MenuScreen {
     }
   }
 
-  /** best lap for the hero chip and the current car's numbers for the garage tile */
-  setInfo(record: number | null, stats: DisplayStats) {
+  /** best lap for the hero chip and the current car's numbers for the garage tile (and the best drift for the zone's) */
+  setInfo(record: number | null, stats: DisplayStats, bestDrift = 0) {
     this.record = record;
     this.stats = stats;
+    this.bestDrift = bestDrift;
     this.renderHero(false);
   }
 
@@ -915,12 +925,14 @@ export class PauseScreen {
     if (v) requestAnimationFrame(() => nav.refocus());
   }
 
-  /** Online there's no restarting the race for everybody; "quit" goes back to the room. */
-  setOnline(v: boolean) {
-    this.el.querySelector<HTMLElement>('[data-a="restart"]')!.classList.toggle('hidden', v);
+  /** Online there's no restarting the race for everybody (the zone just puts you back at the start); "quit" goes back to the room. */
+  setOnline(v: boolean, zone = false) {
+    const restart = this.el.querySelector<HTMLElement>('[data-a="restart"]')!;
+    restart.classList.toggle('hidden', v && !zone);
+    restart.querySelector('.prow-label')!.textContent = zone ? 'Voltar ao início' : 'Recomeçar';
     this.el.querySelector('[data-a="quit"] .prow-label')!.textContent = v ? 'Voltar à sala' : 'Sair para o menu';
     this.el.querySelector('.pb-head h2')!.textContent = v ? 'Menu' : 'Pausa';
-    this.el.querySelector('.pb-kicker')!.textContent = v ? 'Online · a corrida continua' : 'Hyperdrift';
+    this.el.querySelector('.pb-kicker')!.textContent = v ? (zone ? 'Online · a zona continua' : 'Online · a corrida continua') : zone ? 'Zona livre' : 'Hyperdrift';
   }
 
   setResolutionLabel(label: string) {

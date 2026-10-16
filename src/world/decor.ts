@@ -27,13 +27,16 @@ import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferG
 import type { Track } from '../track/track';
 import { ATMOSPHERE_GLSL, CLOUD_Y, SUN_DIR } from './atmosphere';
 
-function hash3(x: number, y: number, z: number) {
+/** What the decor reads from a track; the drift zone passes bare points instead. */
+type DecorTrack = Pick<Track, 'samples' | 'marks' | 'frameAt'>;
+
+export function hash3(x: number, y: number, z: number) {
   const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
   return s - Math.floor(s);
 }
 
 /** Smooth 3D value noise + fbm, used once at load to sculpt and bake the islands. */
-function noise3(x: number, y: number, z: number) {
+export function noise3(x: number, y: number, z: number) {
   const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
   const fx = x - xi, fy = y - yi, fz = z - zi;
   const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy), w = fz * fz * (3 - 2 * fz);
@@ -45,7 +48,7 @@ function noise3(x: number, y: number, z: number) {
     w,
   );
 }
-function fbm3(x: number, y: number, z: number, oct = 4) {
+export function fbm3(x: number, y: number, z: number, oct = 4) {
   let v = 0, a = 0.5, f = 1;
   for (let i = 0; i < oct; i++) {
     v += a * noise3(x * f, y * f, z * f);
@@ -85,7 +88,7 @@ function bakeLight(nv: Vector3, ao: number, out: Color): Color {
  * cloud sea, cavity + height AO), so it renders with an unlit material: one cheap draw per LOD.
  * The bake is in object space, so instances are scaled but never rotated.
  */
-function islandGeometry(detail: number, seed: number): BufferGeometry {
+export function islandGeometry(detail: number, seed: number): BufferGeometry {
   let g: BufferGeometry = new IcosahedronGeometry(1, detail);
   g.deleteAttribute('normal');
   g.deleteAttribute('uv');
@@ -398,18 +401,34 @@ export class Decor {
   private spireGlow: MeshBasicMaterial | null = null;
   private materials: Material[] = [];
 
-  constructor(track: Track) {
+  /**
+   * @param src the lap to dress (islands, hero island, crystal spire), or for the drift zone
+   * just the points its islands must keep clear of
+   */
+  constructor(src: Track | Vector3[]) {
+    const track: DecorTrack = Array.isArray(src)
+      ? { samples: src.map((pos) => ({ pos })) as unknown as Track['samples'], marks: {}, frameAt: () => { throw new Error('no track'); } }
+      : src;
+    const avoid = track.samples.map((p) => p.pos);
+    // a lap is sampled every metre, so a coarse stride is plenty; bare points are already sparse
+    const dense = !Array.isArray(src);
     let seed = 12345;
     const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
     let min = new Vector3(Infinity, Infinity, Infinity);
     let max = new Vector3(-Infinity, -Infinity, -Infinity);
-    for (const s of track.samples) {
-      min = min.min(s.pos);
-      max = max.max(s.pos);
+    for (const p of avoid) {
+      min = min.min(p);
+      max = max.max(p);
     }
     const centre = min.clone().add(max).multiplyScalar(0.5);
+    /** level direction across the deck; bare points have no frame, so pick any heading */
+    const sideways = (smp: { right?: Vector3 }) => {
+      if (smp.right) return smp.right.clone().setY(0).normalize();
+      const a = rnd() * Math.PI * 2;
+      return new Vector3(Math.cos(a), 0, Math.sin(a));
+    };
     const clearOf = (p: Vector3, r: number) => {
-      for (let i = 0; i < track.samples.length; i += 8) if (track.samples[i].pos.distanceTo(p) < r) return false;
+      for (let i = 0; i < track.samples.length; i += dense ? 8 : 1) if (track.samples[i].pos.distanceTo(p) < r) return false;
       return true;
     };
     /** Centre of the circle a turning stretch of the lap is drawn around (its centroid would sit off-centre). */
@@ -483,7 +502,7 @@ export class Decor {
         if (isl.scale < 22 || isl.scale > 150) continue;
         // forests only where you can make them out: on islands that come within sight of the deck
         let near = isl.hero;
-        for (let i = 0; i < track.samples.length && !near; i += 25) near = track.samples[i].pos.distanceTo(isl.pos) < 420 + isl.scale;
+        for (let i = 0; i < track.samples.length && !near; i += dense ? 25 : 1) near = track.samples[i].pos.distanceTo(isl.pos) < 420 + isl.scale;
         if (!near) continue;
         const count = Math.floor(isl.scale * (isl.hero ? 1.6 : 0.6));
         for (let k = 0; k < count; k++) {
@@ -621,7 +640,7 @@ export class Decor {
         const smp = track.samples[i];
         const side = rnd() < 0.5 ? -1 : 1;
         const off = 45 + rnd() * 160;
-        const p = smp.pos.clone().addScaledVector(smp.right.clone().setY(0).normalize(), side * off).add(new Vector3(0, (rnd() - 0.6) * 70, 0));
+        const p = smp.pos.clone().addScaledVector(sideways(smp), side * off).add(new Vector3(0, (rnd() - 0.6) * 70, 0));
         const s = 0.6 + rnd() * rnd() * 4.5;
         if (!clearOf(p, 22 + s)) continue;
         rocks.push(new Matrix4().makeScale(s, s * (0.6 + rnd() * 0.5), s * (0.8 + rnd() * 0.4)).setPosition(p));
@@ -640,7 +659,7 @@ export class Decor {
         const side = rnd() < 0.5 ? -1 : 1;
         const size = 60 + rnd() * 140;
         const off = size * 0.6 + 40 + rnd() * 260;
-        const p = smp.pos.clone().addScaledVector(smp.right.clone().setY(0).normalize(), side * off);
+        const p = smp.pos.clone().addScaledVector(sideways(smp), side * off);
         p.y = CLOUD_Y + 15 + rnd() * (smp.pos.y - CLOUD_Y + 30);
         if (!clearOf(p, size * 0.45 + 18)) continue;
         puffs.push({ p, size });
@@ -692,7 +711,7 @@ export class Decor {
     this.updateLod(centre);
   }
 
-  private helixHeights(track: Track): number[] {
+  private helixHeights(track: DecorTrack): number[] {
     const m = track.marks.helix;
     const out: number[] = [];
     for (let s = m.s0; s <= m.s1; s += 20) out.push(track.frameAt(s).pos.y);

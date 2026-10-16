@@ -93,6 +93,27 @@ describe('room', () => {
     expect(guests[0].session?.seq).toBe(s.seq);
   });
 
+  it('lets latecomers drop into an open session, but not into a race that already started', async () => {
+    const { net, host, tick } = await setup(0);
+    host.startSession('race', {}, 0);
+    tick(5000);
+    const late = await Room.join(new MemoryTransport(net), host.code, 'RUI', DEFAULT_BUILD, { now: () => 0 });
+    open.push(late);
+    const got: string[] = [];
+    late.onSession = (s) => got.push('late:' + s.kind);
+    await flush();
+    expect(got).toEqual([]);
+    host.startSession('zone', {}, 0, true);
+    tick(60000);
+    const later = await Room.join(new MemoryTransport(net), host.code, 'IVO', DEFAULT_BUILD, { now: () => 0 });
+    open.push(later);
+    await flush();
+    // whoever is already in the room hears the go; a latecomer finds it waiting in the roster
+    expect(got).toEqual(['late:zone']);
+    expect(later.session?.kind).toBe('zone');
+    expect(later.session?.open).toBe(true);
+  });
+
   it('relays state to everyone but the sender, and drops stale sessions', async () => {
     const { host, guests } = await setup(2);
     host.startSession('race', {}, 0);

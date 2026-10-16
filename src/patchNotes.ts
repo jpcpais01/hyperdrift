@@ -18,6 +18,12 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      "New ZONA LIVRE: Jardim Celeste, a floating garden island made for drifting, with no laps and no clock. A wide stone plaza with a gymkhana course painted on it, a meadow loop with jumps and light gates, a banked rim road, waterfalls spilling off the edges, a chrome ring to drive through and cherry blossom everywhere. Chain drifts to build a combo (up to ×5), bank it before it runs out and chase your best score. Four resident drivers cruise and drift around the island, and online the host can open the zone for the whole room: friends drop in and out whenever they like, see each other's live combos over their cars and share a scoreboard.",
+    ],
+  },
+  {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
       "Cockpit view: the driver now sits lower in the seat, for a more natural, sporty eye line that still keeps the road in full view over the dashboard.",
       "Three new car bodies with their own proportions: the compact Hot Hatch (short wheelbase, tall boxy cabin, rear wiper), the lifted Rally Raid (high ride, chunky tall-sidewall tyres, black arch cladding and roof rails) and the long, wide Protótipo (low tub between tall wheel pods, bubble canopy and a shark fin). Every body now sets its own wheelbase, track, wheel size, ride height, overhangs and roof line, so they look and sit very differently, and any mix of parts still fits.",
       'New parts in the garage: Tubarão and Rally fronts (with a spot-lamp pod), Quadrada and Jato rears, Persianas and Bossas hoods, mud flaps, a roof spoiler and the option to run without skirts or a wing, Prato fundo, Rally and Lâminas rims, Matriz LED and pop-up headlights, and Trapezoidal and Séxtupla exhausts.',

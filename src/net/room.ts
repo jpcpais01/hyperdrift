@@ -249,10 +249,10 @@ export class Room {
   }
 
   /** Host: start a session for everyone, going live `delayMs` from now. */
-  startSession(kind: string, payload: unknown, delayMs = 4000): SessionInfo | null {
+  startSession(kind: string, payload: unknown, delayMs = 4000, open = false): SessionInfo | null {
     if (!this.isHost) return null;
     this.seq += 1;
-    const session: SessionInfo = { kind, payload, at: this.now() + delayMs, seq: this.seq };
+    const session: SessionInfo = { kind, payload, at: this.now() + delayMs, seq: this.seq, ...(open ? { open: true } : {}) };
     this.session = session;
     for (const g of this.guests.values()) g.link.send({ t: 'go', session } satisfies Msg);
     this.broadcastRoster();
@@ -279,8 +279,8 @@ export class Room {
         this.settings = m.settings;
         const had = this.session;
         this.session = m.session;
-        // joined mid-session, or missed the go: the roster carries the truth
-        if (m.session && (!had || had.seq !== m.session.seq) && this.myId && m.session.at > this.hostNow() - 1000) this.onSession?.(m.session);
+        // joined mid-session, or missed the go: the roster carries the truth (open sessions take latecomers)
+        if (m.session && (!had || had.seq !== m.session.seq) && this.myId && (m.session.open || m.session.at > this.hostNow() - 1000)) this.onSession?.(m.session);
         if (!m.session && had) this.onSessionEnd?.();
         this.onRoster?.();
         break;

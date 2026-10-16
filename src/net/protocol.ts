@@ -56,6 +56,8 @@ export interface SessionInfo {
   at: number;
   /** increases with every session, so stale state from the last one is ignored */
   seq: number;
+  /** drop-in session (the free-roam zone): people who join the room later go straight in */
+  open?: boolean;
 }
 
 export interface RoomSettings {
