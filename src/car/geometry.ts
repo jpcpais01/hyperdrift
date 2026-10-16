@@ -6,15 +6,11 @@ import {
   CircleGeometry,
   ConeGeometry,
   CylinderGeometry,
-  DoubleSide,
   Euler,
   ExtrudeGeometry,
   LatheGeometry,
   Matrix4,
-  Mesh,
-  MeshBasicMaterial,
   Quaternion,
-  Raycaster,
   Shape,
   SphereGeometry,
   TorusGeometry,
@@ -24,8 +20,11 @@ import {
 } from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { bodySections, frontSections, rearSections, type BodyInfo, type BodySculpt } from './bodies';
+import { above, conform, conformBand, conformStrip, ellipse, face, flank, planar, roundRect, soften, wrap, type Projector } from './conform';
 import { loft, profileCurve, refine, sectionAt, type Section } from './loft';
-import { joint, SKELETON } from './skeleton';
+import { SKELETON } from './skeleton';
+import { Surface } from './surface';
 import { ZONE } from './zones';
 
 /** Geometry for one part, grouped by the material it uses. */
@@ -171,224 +170,48 @@ function railXY(pts: [number, number][], z0: number, z1: number, bevel = 0.02): 
   return g;
 }
 
-/** Finds a surface by casting a ray against a set of geometries. */
-export class Surface {
-  private meshes: Mesh[];
-  private ray = new Raycaster();
-  private cache = new Map<string, { point: Vector3; normal: Vector3 } | null>();
-  private static mat = new MeshBasicMaterial({ side: DoubleSide });
-  constructor(geos: BufferGeometry[]) {
-    // split big meshes into slabs along z so a ray only tests the triangles near it
-    this.meshes = geos.flatMap((g) => slabs(g)).map((g) => {
-      g.computeBoundingSphere();
-      g.computeBoundingBox();
-      const m = new Mesh(g, Surface.mat);
-      m.updateMatrixWorld();
-      return m;
-    });
-  }
-  cast(origin: Vector3, dir: Vector3): { point: Vector3; normal: Vector3 } | null {
-    const key = `${origin.x.toFixed(4)},${origin.y.toFixed(4)},${origin.z.toFixed(4)},${dir.x.toFixed(3)},${dir.y.toFixed(3)},${dir.z.toFixed(3)}`;
-    const cached = this.cache.get(key);
-    if (cached !== undefined) return cached && { point: cached.point.clone(), normal: cached.normal.clone() };
-    this.ray.set(origin, dir.clone().normalize());
-    const hits = this.ray.intersectObjects(this.meshes, false);
-    let out: { point: Vector3; normal: Vector3 } | null = null;
-    if (hits.length && hits[0].face) {
-      const n = hits[0].face.normal.clone();
-      if (n.dot(dir) > 0) n.negate();
-      out = { point: hits[0].point.clone(), normal: n };
-    }
-    this.cache.set(key, out);
-    return out && { point: out.point.clone(), normal: out.normal.clone() };
-  }
-  /** height of the top surface at (x, z) */
-  topY(x: number, z: number, fallback: number): number {
-    const h = this.cast(new Vector3(x, 3, z), new Vector3(0, -1, 0));
-    return h ? h.point.y : fallback;
-  }
-  /** z of the front (+1) or rear (-1) face at (x, y) */
-  faceZ(x: number, y: number, side: 1 | -1, fallback: number): { z: number; normal: Vector3 } {
-    const h = this.cast(new Vector3(x, y, side * 4), new Vector3(0, 0, -side));
-    return h ? { z: h.point.z, normal: h.normal } : { z: fallback, normal: new Vector3(0, 0, side) };
-  }
-  /** x of the right-hand side at (y, z) */
-  sideX(y: number, z: number, fallback: number): number {
-    const h = this.cast(new Vector3(3, y, z), new Vector3(-1, 0, 0));
-    return h ? h.point.x : fallback;
-  }
-}
-
-/** Splits an indexed geometry into position-only chunks by triangle z (for faster ray casts). */
-function slabs(g: BufferGeometry, n = 14): BufferGeometry[] {
-  const idx = g.getIndex();
-  const pos = g.getAttribute('position');
-  if (!idx || idx.count < 3000) return [g];
-  g.computeBoundingBox();
-  const z0 = g.boundingBox!.min.z;
-  const z1 = g.boundingBox!.max.z;
-  const lists: number[][] = Array.from({ length: n }, () => []);
-  for (let i = 0; i < idx.count; i += 3) {
-    const a = idx.getX(i);
-    const b = idx.getX(i + 1);
-    const c = idx.getX(i + 2);
-    const zc = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3;
-    const k = Math.min(n - 1, Math.max(0, Math.floor(((zc - z0) / (z1 - z0 + 1e-6)) * n)));
-    for (const v of [a, b, c]) lists[k].push(pos.getX(v), pos.getY(v), pos.getZ(v));
-  }
-  return lists
-    .filter((l) => l.length)
-    .map((l) => {
-      const out = new BufferGeometry();
-      out.setAttribute('position', new BufferAttribute(new Float32Array(l), 3));
-      return out;
-    });
-}
-
-/**
- * Places a detail on the front (+1) or rear (-1) face of the shell at (x, y),
- * turned to follow the local surface, sunk `inset` metres into it.
- * The geometry is modelled facing +z (out of the face) around its origin.
- */
-function onFace(s: Surface, side: 1 | -1, x: number, y: number, inset: number, g: BufferGeometry, extra: [number, number, number] = [0, 0, 0], fallbackZ = 2.0 * side): BufferGeometry {
-  const hit = s.faceZ(x, y, side, fallbackZ);
-  const n = hit.normal;
-  const nz = Math.max(0.25, n.z * side);
-  const yaw = Math.atan2(n.x, nz) * side;
-  const pitch = -Math.atan2(n.y, nz) * side;
-  if (side < 0) g.rotateY(Math.PI);
-  place(g, [x, y, hit.z - side * inset], [pitch + extra[0], yaw + extra[1], extra[2]]);
-  return g;
-}
-
-// ---------------------------------------------------------------- section catalogue
-
-export interface BodyInfo {
-  hull: Section[];
-  /** where the hood overlay may start (behind it is the windscreen) */
-  hoodStart: number;
-}
-
-export function bodySections(id: string): BodyInfo {
-  switch (id) {
-    case 'fastback':
-      return {
-        hoodStart: 0.62,
-        hull: [
-          joint(-1.45),
-          { z: -1.05, yb: 0.25, wb: 0.64, ys: 0.71, ws: 1.0, yt: 0.86, wt: 0.84, crisp: 0.65 },
-          { z: -0.4, yb: 0.25, wb: 0.63, ys: 0.69, ws: 0.95, yt: 0.83, wt: 0.83, crisp: 0.65 },
-          { z: 0.45, yb: 0.25, wb: 0.63, ys: 0.69, ws: 0.94, yt: 0.83, wt: 0.83, crisp: 0.65 },
-          { z: 1.05, yb: 0.25, wb: 0.63, ys: 0.7, ws: 0.98, yt: 0.85, wt: 0.82, crisp: 0.65 },
-          joint(1.45),
-        ],
-      };
-    case 'wedge':
-      return {
-        hoodStart: 1.04,
-        hull: [
-          joint(-1.45),
-          { z: -0.95, yb: 0.25, wb: 0.65, ys: 0.68, ws: 1.02, yt: 0.86, wt: 0.88, crisp: 0.85 },
-          { z: -0.2, yb: 0.25, wb: 0.64, ys: 0.66, ws: 0.96, yt: 0.82, wt: 0.84, crisp: 0.85 },
-          { z: 0.6, yb: 0.25, wb: 0.64, ys: 0.67, ws: 0.98, yt: 0.82, wt: 0.84, crisp: 0.85 },
-          { z: 1.1, yb: 0.25, wb: 0.63, ys: 0.7, ws: 1.0, yt: 0.83, wt: 0.84, crisp: 0.7 },
-          joint(1.45),
-        ],
-      };
-    default:
-      return {
-        hoodStart: 0.72,
-        hull: [
-          joint(-1.45),
-          { z: -1.0, yb: 0.25, wb: 0.64, ys: 0.71, ws: 0.99, yt: 0.87, wt: 0.84, crisp: 0.72 },
-          { z: -0.4, yb: 0.25, wb: 0.63, ys: 0.69, ws: 0.95, yt: 0.84, wt: 0.83, crisp: 0.72 },
-          { z: 0.4, yb: 0.25, wb: 0.63, ys: 0.69, ws: 0.95, yt: 0.84, wt: 0.83, crisp: 0.72 },
-          { z: 1.0, yb: 0.25, wb: 0.63, ys: 0.7, ws: 0.97, yt: 0.85, wt: 0.82, crisp: 0.72 },
-          joint(1.45),
-        ],
-      };
-  }
-}
-
-/** Nose sections, from the front joint forwards. */
-export function frontSections(id: string): Section[] {
-  if (id === 'muscle') {
-    return [
-      joint(1.45),
-      { z: 1.75, yb: 0.26, wb: 0.62, ys: 0.68, ws: 0.97, yt: 0.85, wt: 0.82, crisp: 0.85 },
-      { z: 2.0, yb: 0.27, wb: 0.6, ys: 0.64, ws: 0.96, yt: 0.8, wt: 0.78, crisp: 0.95 },
-      { z: 2.1, yb: 0.28, wb: 0.56, ys: 0.6, ws: 0.92, yt: 0.74, wt: 0.72, crisp: 0.95 },
-    ];
-  }
-  if (id === 'aggressive') {
-    return [
-      joint(1.45),
-      { z: 1.72, yb: 0.25, wb: 0.62, ys: 0.65, ws: 0.96, yt: 0.8, wt: 0.78, crisp: 0.75 },
-      { z: 1.98, yb: 0.23, wb: 0.6, ys: 0.52, ws: 0.93, yt: 0.66, wt: 0.68, crisp: 0.85 },
-      { z: 2.12, yb: 0.22, wb: 0.56, ys: 0.4, ws: 0.86, yt: 0.5, wt: 0.58, crisp: 0.9 },
-      { z: 2.2, yb: 0.22, wb: 0.42, ys: 0.32, ws: 0.7, yt: 0.38, wt: 0.42, crisp: 0.9 },
-    ];
-  }
-  return [
-    joint(1.45),
-    { z: 1.75, yb: 0.25, wb: 0.62, ys: 0.66, ws: 0.95, yt: 0.8, wt: 0.78, crisp: 0.6 },
-    { z: 2.0, yb: 0.24, wb: 0.58, ys: 0.56, ws: 0.9, yt: 0.68, wt: 0.64, crisp: 0.4 },
-    { z: 2.13, yb: 0.25, wb: 0.5, ys: 0.46, ws: 0.8, yt: 0.56, wt: 0.5, crisp: 0.35 },
-    { z: 2.19, yb: 0.28, wb: 0.32, ys: 0.4, ws: 0.6, yt: 0.48, wt: 0.3, crisp: 0.3 },
-  ];
-}
-
-/** Tail sections, from the very back up to the rear joint. */
-export function rearSections(id: string): Section[] {
-  if (id === 'kamm') {
-    return [
-      { z: -2.1, yb: 0.3, wb: 0.56, ys: 0.64, ws: 0.92, yt: 0.86, wt: 0.74, crisp: 0.95 },
-      { z: -1.82, yb: 0.27, wb: 0.6, ys: 0.68, ws: 0.96, yt: 0.86, wt: 0.83, crisp: 0.75 },
-      joint(-1.45),
-    ];
-  }
-  if (id === 'diffuser') {
-    return [
-      { z: -2.14, yb: 0.32, wb: 0.5, ys: 0.58, ws: 0.84, yt: 0.74, wt: 0.66, crisp: 0.85 },
-      { z: -1.95, yb: 0.29, wb: 0.58, ys: 0.66, ws: 0.95, yt: 0.82, wt: 0.78, crisp: 0.75 },
-      joint(-1.45),
-    ];
-  }
-  return [
-    { z: -2.16, yb: 0.32, wb: 0.36, ys: 0.5, ws: 0.62, yt: 0.66, wt: 0.42, crisp: 0.35 },
-    { z: -2.08, yb: 0.29, wb: 0.52, ys: 0.58, ws: 0.84, yt: 0.76, wt: 0.62, crisp: 0.4 },
-    { z: -1.82, yb: 0.27, wb: 0.6, ys: 0.66, ws: 0.95, yt: 0.83, wt: 0.8, crisp: 0.6 },
-    joint(-1.45),
-  ];
-}
-
 // ---------------------------------------------------------------- the shell
 
-/** Wheel arch radius: tyre radius plus suspension travel plus a gap. */
-export const ARCH_RADIUS = 0.43;
+/** Wheel arch radius: tyre radius plus the drawn suspension travel plus a small gap. */
+export const ARCH_RADIUS = 0.405;
 /** x of the wheel-well wall (inside the tyre's inner face even at full lock). */
 const WELL_X = 0.5;
 const AXLES = [SKELETON.frontAxleZ, SKELETON.rearAxleZ];
 /** vertices this close inside the arch are snapped onto its edge */
 const EDGE_BAND = 0.05;
 
-/** Fender flare added to the shell's half width at (y, z) for a given half width. */
-function flare(ax: number, y: number, z: number): number {
+/** Fender flare added to the shell's half width at (y, z): wide haunches over the wheels, a waist between them. */
+function flare(sc: BodySculpt, ax: number, y: number, z: number): number {
   let out = 0;
   for (const az of AXLES) {
-    const u = (z - az) / 0.8;
+    const front = az > 0;
+    // the rear haunch swells forward into the doors, the front wing trails back into them
+    const reach = front ? (z < az ? 0.95 : 0.72) : z > az ? 1.15 : 0.55;
+    const u = (z - az) / reach;
     if (Math.abs(u) >= 1) continue;
     const k = (1 - u * u) ** 2;
-    const wy = smooth(0.2, 0.48, y) * (1 - smooth(0.76, 0.9, y));
-    out += 0.075 * k * wy * smooth(0.45, 0.8, ax);
+    const wy = smooth(0.2, 0.46, y) * (1 - smooth(0.8, 0.97, y));
+    out += (front ? sc.flareF : sc.flareR) * k * wy * smooth(0.45, 0.8, ax);
   }
   return out;
 }
 
-/** Shallow sculpted scallop along the doors, to break up the flat flanks. */
-function scallop(ax: number, y: number, z: number): number {
-  const along = smooth(-0.9, -0.45, z) * (1 - smooth(0.55, 0.92, z));
-  return 0.02 * along * Math.exp(-(((y - 0.46) / 0.065) ** 2)) * smooth(0.6, 0.85, ax);
+/** Sculpted scallop along the doors (rising towards the tail) and, on some bodies, a deep intake scoop. */
+function scallop(sc: BodySculpt, ax: number, y: number, z: number): number {
+  const along = smooth(-1.0, -0.5, z) * (1 - smooth(0.55, 0.95, z));
+  const yl = sc.crease ? sc.crease.yF + (sc.crease.yR - sc.crease.yF) * smooth(1.0, -1.0, z) - 0.17 : 0.46;
+  let d = (0.016 + (sc.crease?.amount ?? 0)) * along * Math.exp(-(((y - yl) / 0.06) ** 2));
+  const it = sc.intake;
+  if (it) {
+    const zc = (it.z0 + it.z1) / 2;
+    const yc = (it.y0 + it.y1) / 2;
+    const u = (z - zc) / ((it.z1 - it.z0) / 2);
+    // teardrop: deepest at the back, where it feeds the engine
+    const v = (y - yc - 0.06 * u) / ((it.y1 - it.y0) / 2) / (0.75 + 0.25 * (1 - u));
+    const r = Math.hypot(u, v);
+    d += it.depth * (1 - smooth(0.55, 1.0, r)) * (0.45 + 0.55 * smooth(1, -0.6, u));
+  }
+  return d * smooth(0.6, 0.85, ax);
 }
 
 /** Nearest axle's distance and direction in the (y, z) plane. */
@@ -402,7 +225,7 @@ function archPolar(y: number, z: number): { r: number; az: number } {
 }
 
 /** Half width of the finished shell surface at (y, z), computed from the sections. */
-function outerHalfWidth(fine: Section[], y: number, z: number): number {
+function outerHalfWidth(fine: Section[], sc: BodySculpt, y: number, z: number): number {
   const curve = profileCurve(sectionAt(fine, z));
   let prev = curve.getPoint(0);
   for (let i = 1; i <= 48; i++) {
@@ -410,15 +233,30 @@ function outerHalfWidth(fine: Section[], y: number, z: number): number {
     if (p.y >= y) {
       const t = Math.min(1, Math.max(0, (y - prev.y) / Math.max(1e-5, p.y - prev.y)));
       const ax = prev.x + (p.x - prev.x) * t;
-      return ax + flare(ax, y, z) - scallop(ax, y, z);
+      return ax + flare(sc, ax, y, z) - scallop(sc, ax, y, z);
     }
     prev = p;
   }
   return prev.x;
 }
 
+/** Height of a section's skin at half width x (on the top or upper flank). */
+export function skinY(sec: Section, x: number): number {
+  const curve = profileCurve(sec);
+  let prev = curve.getPoint(1);
+  for (let i = 47; i >= 24; i--) {
+    const p = curve.getPoint(i / 48);
+    if (p.x >= x) {
+      const t = Math.min(1, Math.max(0, (x - prev.x) / Math.max(1e-5, p.x - prev.x)));
+      return prev.y + (p.y - prev.y) * t;
+    }
+    prev = p;
+  }
+  return prev.y;
+}
+
 /** Flares the fenders, sculpts the doors and pushes the wheel wells in. Returns per-vertex paint zones (the shader darkens the wells itself). */
-function sculpt(g: BufferGeometry): Float32Array {
+function sculpt(g: BufferGeometry, sc: BodySculpt, cut = true): Float32Array {
   const pos = g.getAttribute('position') as BufferAttribute;
   const zone = new Float32Array(pos.count).fill(ZONE.auto);
   for (let i = 0; i < pos.count; i++) {
@@ -427,9 +265,9 @@ function sculpt(g: BufferGeometry): Float32Array {
     const z = pos.getZ(i);
     const sx = x < 0 ? -1 : 1;
     let ax = Math.abs(x);
-    ax += flare(ax, y, z) - scallop(ax, y, z);
+    ax += flare(sc, ax, y, z) - scallop(sc, ax, y, z);
     const { r, az } = archPolar(y, z);
-    if (ax > WELL_X && r < ARCH_RADIUS) {
+    if (cut && ax > WELL_X && r < ARCH_RADIUS) {
       if (r > ARCH_RADIUS - EDGE_BAND && y > SKELETON.wheelY - 0.2) {
         // the vertices nearest the cut are pulled onto the arch circle, so the opening is a clean round edge
         const k = ARCH_RADIUS / Math.max(1e-4, r);
@@ -447,53 +285,120 @@ function sculpt(g: BufferGeometry): Float32Array {
   return zone;
 }
 
+/** Where the nose or tail face is, for placing lamps, grilles and bumpers on any shape. */
+export interface EndInfo {
+  /** z of the very tip */
+  tip: number;
+  /** bottom and top of the face, near the tip */
+  bottom: number;
+  top: number;
+  /** shoulder height and half width near the tip */
+  ys: number;
+  ws: number;
+}
+
 export interface ShellInfo {
   geo: PartGeo;
   /** outer skin, without the cabin */
   surface: Surface;
+  body: BodyInfo;
   hoodStart: number;
   /** z where the hood's top surface ends at the nose */
   hoodEnd: number;
   /** smooth sections of the whole shell */
   fine: Section[];
+  nose: EndInfo;
+  tail: EndInfo;
+  /** paint shader layout: door shut lines and the fuel filler */
+  doors: { front: number; rear: number };
+}
+
+function endInfo(fine: Section[], side: 1 | -1): EndInfo {
+  const tipSec = side > 0 ? fine[fine.length - 1] : fine[0];
+  const near = sectionAt(fine, tipSec.z - side * 0.14);
+  return { tip: tipSec.z, bottom: Math.max(tipSec.yb, near.yb), top: near.yt, ys: near.ys, ws: near.ws };
 }
 
 /**
- * One continuous body shell for body + front + rear: the three parts share the
- * standard joint sections, so lofting them together gives a seamless surface.
- * Fender flares and wheel wells are then sculpted into it at the skeleton's axles.
+ * One continuous body shell for body + front + rear: the nose and tail are
+ * built from the body's own joint sections, so lofting them together gives a
+ * seamless surface. Fender flares, scallops and wheel wells are then sculpted
+ * into it at the skeleton's axles.
  */
 export function shellPart(bodyId: string, frontId: string, rearId: string): ShellInfo {
   const body = bodySections(bodyId);
-  const keys = [...rearSections(rearId), ...body.hull.slice(1, -1), ...frontSections(frontId)];
+  const keys = [...rearSections(rearId, body.rearJoint), ...body.hull, ...frontSections(frontId, body.frontJoint)];
   const fine = refine(keys, (len) => len / 0.032);
-  const g = loft(fine, { capStart: true, capEnd: true, ring: 40 });
-  g.setAttribute('zone', new BufferAttribute(sculpt(g), 1));
+  const sc = body.sculpt;
+  const g = loft(fine, { capStart: true, capEnd: true, ring: 46 });
+  const uncut = g.clone();
+  g.setAttribute('zone', new BufferAttribute(sculpt(g, sc), 1));
   g.computeVertexNormals();
+  // the arch cut folds triangles around the opening; take the skin's normals
+  // from an uncut copy so the paint around every arch shades smoothly
+  sculpt(uncut, sc, false);
+  uncut.computeVertexNormals();
+  {
+    const p = g.getAttribute('position');
+    const n = g.getAttribute('normal');
+    const un = uncut.getAttribute('normal');
+    for (let i = 0; i < p.count; i++) {
+      if (Math.abs(p.getX(i)) > WELL_X + 1e-4) n.setXYZ(i, un.getX(i), un.getY(i), un.getZ(i));
+    }
+    n.needsUpdate = true;
+    uncut.dispose();
+  }
   const geo = emptyPart();
   geo.paint.push(g);
 
-  // arch lips: a rolled edge that follows the fender around each opening
+  // arch lips: a rolled edge that follows the fender around each opening, and
+  // a dark liner from the lip back to the well wall that hides the cut
   for (const az of AXLES) {
     const pts: Vector3[] = [];
-    for (let i = 0; i <= 28; i++) {
-      const a = -0.18 + (i / 28) * (Math.PI + 0.36);
+    const liner: number[] = [];
+    const lIdx: number[] = [];
+    const M = 40;
+    for (let i = 0; i <= M; i++) {
+      const a = -0.2 + (i / M) * (Math.PI + 0.4);
       const y = SKELETON.wheelY + Math.sin(a) * (ARCH_RADIUS + 0.008);
       const z = az + Math.cos(a) * (ARCH_RADIUS + 0.008);
       if (y < sectionAt(fine, z).yb + 0.015) continue;
-      pts.push(new Vector3(outerHalfWidth(fine, y, z) - 0.01, y, z));
+      const ox = outerHalfWidth(fine, sc, y, z);
+      pts.push(new Vector3(ox - 0.014, y, z));
+      const ly = SKELETON.wheelY + Math.sin(a) * (ARCH_RADIUS - 0.004);
+      const lz = az + Math.cos(a) * (ARCH_RADIUS - 0.004);
+      liner.push(ox - 0.012, ly, lz, WELL_X, ly, lz);
     }
-    const lip = new TubeGeometry(new CatmullRomCurve3(pts), 40, 0.016, 6, false);
+    const lip = new TubeGeometry(new CatmullRomCurve3(pts), 48, 0.02, 6, false);
     geo.paint.push(...both(zoned(lip, ZONE.auto)));
+    const n = liner.length / 6;
+    for (let i = 0; i < n - 1; i++) {
+      const k = i * 2;
+      // facing the axle (into the opening)
+      lIdx.push(k, k + 2, k + 1, k + 1, k + 2, k + 3);
+    }
+    const lg = new BufferGeometry();
+    lg.setAttribute('position', new BufferAttribute(new Float32Array(liner), 3));
+    lg.setIndex(lIdx);
+    lg.computeVertexNormals();
+    const nrm = lg.getAttribute('normal');
+    // make sure it faces the wheel: the normal at the top of the arch must point down
+    const mid = Math.floor(n / 2) * 2;
+    if (nrm.getY(mid) > 0) {
+      for (let i = 0; i < lIdx.length; i += 3) [lIdx[i + 1], lIdx[i + 2]] = [lIdx[i + 2], lIdx[i + 1]];
+      lg.setIndex(lIdx);
+      lg.computeVertexNormals();
+    }
+    geo.trim.push(...both(lg));
   }
 
   // underfloor: a dark flat pan so nothing glows through the gaps underneath
   geo.trim.push(place(new BoxGeometry(1.0, 0.02, 3.6), [0, 0.24, -0.02]));
 
-  // ray casts for placing details use a lighter copy of the same shell
-  const coarse = loft(refine(keys, (len) => len / 0.06), { capStart: true, capEnd: true, ring: 24 });
-  sculpt(coarse);
-  const surface = new Surface([coarse]);
+  // detail placement casts rays at the same skin
+  const surface = new Surface([g]);
+  const cabin = body.cabin;
+  const hoodStart = cabin[0].z + 0.02;
   // hood ends where the nose starts to fall away
   const base = surface.topY(0, SKELETON.frontJointZ, 0.84);
   let hoodEnd = 2.0;
@@ -503,50 +408,84 @@ export function shellPart(bodyId: string, frontId: string, rearId: string): Shel
       break;
     }
   }
-  return { geo, surface, hoodStart: body.hoodStart, hoodEnd, fine };
+  const zB = bPillarZ(body);
+  const shell: ShellInfo = {
+    geo,
+    surface,
+    body,
+    hoodStart,
+    hoodEnd,
+    fine,
+    nose: endInfo(fine, 1),
+    tail: endInfo(fine, -1),
+    doors: { front: Math.min(cabin[0].z + 0.14, 1.0), rear: zB - 0.16 },
+  };
+  bodyFeatures(shell);
+  return shell;
+}
+
+/** z of the B-pillar: a little behind the middle of the side glass. */
+function bPillarZ(body: BodyInfo): number {
+  const k = body.cabin;
+  const roofMax = Math.max(...k.map((c) => c.roof));
+  const firstHigh = k.find((c) => c.roof > roofMax - 0.06)!.z;
+  const lastHigh = [...k].reverse().find((c) => c.roof > roofMax - 0.06)!.z;
+  return firstHigh + (lastHigh - firstHigh) * 0.62;
+}
+
+/** Trim that belongs to a body: front fender gills, flank intakes, engine-cover louvres. */
+function bodyFeatures(shell: ShellInfo) {
+  const { surface: s, body, geo } = shell;
+  if (body.features.gills) {
+    // three raked gills behind the front wheel, dark with a bright edge
+    const z0 = SKELETON.frontAxleZ - ARCH_RADIUS - 0.09;
+    for (let i = 0; i < 3; i++) {
+      const zc = z0 - i * 0.07;
+      const slot: [number, number][] = [
+        [zc + 0.012, 0.47],
+        [zc + 0.045, 0.62],
+        [zc + 0.02, 0.625],
+        [zc - 0.014, 0.475],
+      ];
+      geo.trim.push(...both(conform(s, soften(slot, 0.3), flank(), { off: 0.002, step: 0.02, rings: 2 })));
+      geo.chrome.push(...both(conformStrip(s, [[zc + 0.044, 0.625], [zc + 0.012, 0.47]], 0.006, flank(), { off: 0.003 })));
+    }
+  }
+  if (body.features.intake && body.sculpt.intake) {
+    const it = body.sculpt.intake;
+    // the grille sits deep in the back of the scoop
+    const zc = it.z0 + (it.z1 - it.z0) * 0.3;
+    const yc = (it.y0 + it.y1) / 2 - 0.02;
+    const mouth = soften(
+      [
+        [zc + 0.14, yc + 0.06],
+        [zc - 0.1, yc + 0.09],
+        [zc - 0.12, yc - 0.06],
+        [zc + 0.09, yc - 0.075],
+      ],
+      0.3,
+    );
+    geo.trim.push(...both(conform(s, mouth, flank(), { off: 0.006, step: 0.02, rings: 5 })));
+    for (let k = 0; k < 5; k++) {
+      const yy = yc - 0.05 + k * 0.028;
+      geo.carbon.push(...both(conformStrip(s, [[zc + 0.09, yy - 0.008], [zc - 0.09, yy + 0.016]], 0.01, flank(), { off: 0.006, wall: 0.006 })));
+    }
+  }
+  if (body.features.louvres) {
+    // engine cover louvres between the rear glass and the tail
+    const zA = body.cabin[body.cabin.length - 1].z - 0.06;
+    const zEnd = SKELETON.rearJointZ - 0.02;
+    const base = roundRect(0, (zA + zEnd) / 2, 0.78, zA - zEnd, 0.04);
+    geo.trim.push(conform(s, base, above(), { off: 0.003, step: 0.05, rings: 3 }));
+    const n = Math.max(3, Math.floor((zA - zEnd - 0.04) / 0.055));
+    for (let k = 0; k < n; k++) {
+      const z = zEnd + 0.04 + ((zA - zEnd - 0.08) * k) / Math.max(1, n - 1);
+      geo.paint.push(zoned(conformStrip(s, [[-0.36, z], [0.36, z]], 0.024, above(), { off: 0.012, wall: 0.01 }), ZONE.rear));
+    }
+  }
 }
 
 // ---------------------------------------------------------------- cabin
-
-interface CabinKey {
-  z: number;
-  roof: number;
-  belt: number;
-  beltW: number;
-  roofW: number;
-}
-
-function cabinKeys(id: string): CabinKey[] {
-  switch (id) {
-    case 'fastback':
-      return [
-        { z: 0.6, roof: 0.84, belt: 0.84, beltW: 0.76, roofW: 0.62 },
-        { z: 0.25, roof: 1.08, belt: 0.88, beltW: 0.76, roofW: 0.58 },
-        { z: -0.05, roof: 1.2, belt: 0.9, beltW: 0.76, roofW: 0.55 },
-        { z: -0.45, roof: 1.18, belt: 0.9, beltW: 0.76, roofW: 0.55 },
-        { z: -0.95, roof: 1.02, belt: 0.88, beltW: 0.76, roofW: 0.58 },
-        { z: -1.42, roof: 0.85, belt: 0.84, beltW: 0.72, roofW: 0.64 },
-      ];
-    case 'wedge':
-      return [
-        { z: 1.02, roof: 0.83, belt: 0.83, beltW: 0.8, roofW: 0.66 },
-        { z: 0.62, roof: 1.02, belt: 0.86, beltW: 0.8, roofW: 0.6 },
-        { z: 0.3, roof: 1.12, belt: 0.88, beltW: 0.79, roofW: 0.56 },
-        { z: -0.4, roof: 1.12, belt: 0.88, beltW: 0.78, roofW: 0.56 },
-        { z: -0.8, roof: 0.98, belt: 0.87, beltW: 0.77, roofW: 0.6 },
-        { z: -1.05, roof: 0.85, belt: 0.85, beltW: 0.74, roofW: 0.64 },
-      ];
-    default:
-      return [
-        { z: 0.7, roof: 0.85, belt: 0.85, beltW: 0.76, roofW: 0.62 },
-        { z: 0.32, roof: 1.08, belt: 0.89, beltW: 0.77, roofW: 0.58 },
-        { z: 0.02, roof: 1.24, belt: 0.91, beltW: 0.77, roofW: 0.55 },
-        { z: -0.55, roof: 1.25, belt: 0.91, beltW: 0.76, roofW: 0.55 },
-        { z: -0.95, roof: 1.08, belt: 0.89, beltW: 0.75, roofW: 0.58 },
-        { z: -1.18, roof: 0.86, belt: 0.86, beltW: 0.72, roofW: 0.62 },
-      ];
-  }
-}
 
 /**
  * A panel that lies exactly on the cabin's surface (offset outwards by `off`),
@@ -603,20 +542,27 @@ function cabinPatch(fine: Section[], t0: number, t1: number, z0: number, z1: num
 
 export function cabinPart(id: string, shell: ShellInfo): PartGeo {
   const geo = emptyPart();
-  const keys = cabinKeys(id);
+  const keys = shell.body.cabin;
+  // the glasshouse grows out of the body: its belt sits just above the skin
+  // under it and its base is buried in the body, whatever the body's shape
   const secs: Section[] = keys
     .slice()
     .reverse()
-    .map((k) => ({
-      z: k.z,
-      yb: 0.78,
-      wb: k.beltW - 0.04,
-      ys: k.belt,
-      ws: k.beltW,
-      yt: Math.max(k.roof, k.belt + 0.01),
-      wt: k.roofW,
-      crisp: 0.55,
-    }));
+    .map((k) => {
+      const under = sectionAt(shell.fine, k.z);
+      const belt = skinY(under, k.beltW) + 0.03;
+      return {
+        z: k.z,
+        yb: Math.min(under.yc ?? under.yt, belt) - 0.06,
+        wb: k.beltW - 0.05,
+        ys: belt,
+        ws: k.beltW,
+        yt: Math.max(k.roof, belt + 0.01),
+        wt: k.roofW,
+        crisp: 0.55,
+      };
+    });
+  void id;
   const fine = refine(secs, 8);
   geo.glass.push(loft(fine, { capStart: true, capEnd: true, ring: 32 }));
 
@@ -639,21 +585,23 @@ export function cabinPart(id: string, shell: ShellInfo): PartGeo {
     }
   }
   const zSideBack = zRg - (zRg - zBack) * 0.35;
-  const zB = zWs + (zSideBack - zWs) * 0.48;
+  const zB = bPillarZ(shell.body);
 
   const roofPanels = [
     cabinPatch(fine, 0.72, 1.0, zRg - 0.04, zWs + 0.04, 0.006, 8),
     // A-pillar
     cabinPatch(fine, 0.6, 0.76, zWs + 0.02, zFront - 0.015, 0.006, 4),
-    // C-pillar (sail panel)
+    // C-pillar (sail panel), with a little quarter window cut out of its front
     cabinPatch(fine, 0.49, 0.76, zBack + 0.01, zSideBack, 0.006, 6),
     // B-pillar
     cabinPatch(fine, 0.49, 0.74, zB - 0.035, zB + 0.035, 0.006, 4, 0.035),
   ];
   for (const p of roofPanels) geo.paint.push(...both(zoned(p, ZONE.roof)));
-  // black belt trim and drip rail frame the side glass
-  geo.trim.push(...both(cabinPatch(fine, 0.47, 0.51, zBack + 0.02, zFront - 0.02, 0.008, 2)));
+  // gloss black frame around the side glass, a chrome window line along the belt and drip rail
+  geo.trim.push(...both(cabinPatch(fine, 0.47, 0.515, zBack + 0.02, zFront - 0.02, 0.008, 2)));
+  geo.chrome.push(...both(cabinPatch(fine, 0.512, 0.522, zSideBack + 0.02, zFront - 0.06, 0.0095, 1)));
   geo.chrome.push(...both(cabinPatch(fine, 0.735, 0.752, zSideBack, zWs + 0.02, 0.009, 1)));
+  geo.trim.push(...both(cabinPatch(fine, 0.6, 0.74, zFront - 0.05, zFront - 0.015, 0.0075, 3)));
 
   // shark-fin antenna
   const finZ = zRg + 0.14;
@@ -675,34 +623,40 @@ export function cabinPart(id: string, shell: ShellInfo): PartGeo {
     ),
   );
 
-  // side mirrors: painted housing, dark arm, reflective glass facing back
-  const mk = keys[1];
-  const mz = zWs + (zFront - zWs) * 0.45;
-  const my = mk.belt + 0.07;
-  const mx = keys[0].beltW + 0.15;
-  const housing = rbox(0.17, 0.085, 0.1, 0.04, 3);
-  housing.scale(1, 1, 1);
-  place(housing, [mx, my, mz], [0, 0.12, 0]);
+  // side mirrors: a sculpted painted pod on a slim arm, reflective glass facing back
+  const mz = zWs + (zFront - zWs) * 0.5;
+  const under = sectionAt(fine, mz);
+  const my = under.ys + 0.065;
+  const mx = under.ws + 0.13;
+  const pod: Section[] = [];
+  for (let i = 0; i <= 6; i++) {
+    const t = i / 6;
+    const r = Math.sin(Math.PI * (0.08 + 0.84 * t)) ** 0.6;
+    const zz = mz - 0.055 + 0.13 * t;
+    pod.push({ z: zz, yb: my - 0.04 * r, wb: 0.06 * r, ys: my - 0.005, ws: 0.085 * r + 0.004, yt: my + 0.038 * r, wt: 0.06 * r, crisp: 0.45 });
+  }
+  const housing = loft(pod, { capStart: true, capEnd: true, ring: 12 });
+  housing.translate(mx, 0, 0);
   geo.paint.push(...both(zoned(housing, ZONE.roof)));
-  const glassM = rbox(0.14, 0.065, 0.01, 0.004);
-  place(glassM, [mx - 0.005, my, mz - 0.052], [0, 0.12, 0]);
+  const glassM = rbox(0.15, 0.06, 0.008, 0.02, 2);
+  place(glassM, [mx, my - 0.002, mz - 0.054]);
   geo.chrome.push(...both(glassM));
-  const arm = rbox(0.13, 0.03, 0.05, 0.012);
-  place(arm, [mx - 0.1, my - 0.035, mz + 0.01], [0, 0.12, -0.25]);
+  const arm = rbox(0.12, 0.022, 0.05, 0.01, 2);
+  place(arm, [mx - 0.09, my - 0.03, mz + 0.02], [0, 0.1, -0.3]);
   geo.trim.push(...both(arm));
 
   // cowl and wipers at the base of the windscreen
-  const cowlY = shell.surface.topY(0, zFront + 0.02, keys[0].belt);
+  const cowlY = shell.surface.topY(0, zFront + 0.02, keys[0].roof);
   geo.trim.push(place(rbox(keys[0].beltW * 1.9, 0.02, 0.08, 0.008), [0, cowlY + 0.004, zFront + 0.03]));
   for (const x of [0.32, -0.12]) {
     geo.trim.push(place(rbox(0.5, 0.012, 0.016, 0.005), [x, cowlY + 0.03, zFront - 0.02], [0.5, 0.18, 0]));
   }
 
-  // door handles sit in the doors, just ahead of the shut line
-  const hz = -0.45;
-  const hy = 0.72;
-  const hx = shell.surface.sideX(hy, hz, 0.95);
-  geo.chrome.push(...both(place(rbox(0.025, 0.028, 0.14, 0.012), [hx + 0.006, hy, hz])));
+  // flush door handles just ahead of the rear shut line
+  const hz = shell.doors.rear + 0.16;
+  const hy = sectionAt(shell.fine, hz).ys - 0.035;
+  geo.chrome.push(...both(conformStrip(shell.surface, [[hz - 0.07, hy], [hz + 0.07, hy]], 0.024, flank(), { off: 0.004, wall: 0.004 })));
+  geo.trim.push(...both(conformStrip(shell.surface, [[hz - 0.05, hy - 0.016], [hz + 0.05, hy - 0.016]], 0.01, flank(), { off: 0.002 })));
 
   // third brake light at the top of the rear glass
   const tbZ = zRg - 0.06;
@@ -715,8 +669,8 @@ export function cabinPart(id: string, shell: ShellInfo): PartGeo {
 function splitter(s: Surface, y: number, halfW: number, protrude: number, depth: number, thick: number): BufferGeometry {
   const front: [number, number][] = [];
   let lastZ = 2.0;
-  for (let i = 0; i <= 14; i++) {
-    const x = -halfW + (2 * halfW * i) / 14;
+  for (let i = 0; i <= 18; i++) {
+    const x = -halfW + (2 * halfW * i) / 18;
     const h = s.cast(new Vector3(x, y + 0.05, 4), new Vector3(0, 0, -1));
     if (h) lastZ = h.point.z;
     front.push([x, lastZ + protrude - 0.06 * (Math.abs(x) / halfW) ** 4]);
@@ -726,140 +680,224 @@ function splitter(s: Surface, y: number, halfW: number, protrude: number, depth:
   return plateXZ(outline, thick, y, 0.006);
 }
 
-/** Grille: a dark surround filled with a diagonal mesh of thin bars. */
-function meshGrille(w: number, h: number, bucket: BufferGeometry[]): BufferGeometry[] {
-  const out: BufferGeometry[] = [];
-  out.push(rbox(w, h, 0.05, Math.min(h, w) * 0.3));
-  const n = Math.round(w / 0.05);
-  for (let i = 0; i <= n; i++) {
-    for (const s of [1, -1]) {
-      const bar = new BoxGeometry(0.008, h * 1.25, 0.012);
-      bar.rotateZ(s * 0.75);
-      bar.translate(-w / 2 + (w * i) / n, 0, 0.03);
-      // clip the bar to the opening by squashing what sticks out
-      const p = bar.getAttribute('position');
-      for (let k = 0; k < p.count; k++) {
-        p.setX(k, Math.max(-w / 2 + 0.01, Math.min(w / 2 - 0.01, p.getX(k))));
-        p.setY(k, Math.max(-h / 2 + 0.01, Math.min(h / 2 - 0.01, p.getY(k))));
-      }
-      bar.computeVertexNormals();
-      bucket.push(bar);
-    }
+/** Horizontal bars filling an ellipse-ish opening: strips across at evenly spaced heights. */
+function bars(s: Surface, proj: Projector, cx: number, cy: number, halfW: (dy: number) => number, h: number, n: number, width: number, bucket: BufferGeometry[], off = 0.006) {
+  for (let i = 0; i < n; i++) {
+    const dy = -h / 2 + (h * (i + 0.5)) / n;
+    const w = halfW(dy);
+    if (w < 0.03) continue;
+    bucket.push(conformStrip(s, [[cx - w, cy + dy], [cx + w, cy + dy]], width, proj, { off, wall: off * 0.8 }));
   }
-  return out;
 }
 
-export function frontPart(id: string, s: Surface): PartGeo {
-  const g = emptyPart();
-  if (id === 'muscle') {
-    // tall chrome-framed grille with vertical bars and a badge
-    const gy = 0.52;
-    const frame = rbox(0.86, 0.24, 0.05, 0.03);
-    g.chrome.push(onFace(s, 1, 0, gy, 0.02, frame));
-    g.trim.push(onFace(s, 1, 0, gy, 0.0, rbox(0.8, 0.19, 0.05, 0.02)));
-    for (let i = -6; i <= 6; i++) g.chrome.push(onFace(s, 1, i * 0.058, gy, -0.005, rbox(0.01, 0.17, 0.02, 0.004)));
-    g.chrome.push(onFace(s, 1, 0, gy, -0.03, cyl(0.035, 0.012, 20).rotateX(Math.PI / 2)));
-    // chrome bumper bar with over-riders
-    const fz = s.faceZ(0, 0.33, 1, 2.1).z;
-    const bar = new CylinderGeometry(0.035, 0.035, 1.56, 14);
-    place(bar, [0, 0.33, fz + 0.05], [0, 0, Math.PI / 2]);
-    g.chrome.push(bar);
-    for (const x of [0.3, -0.3]) g.chrome.push(place(rbox(0.06, 0.13, 0.08, 0.025), [x, 0.33, fz + 0.06]));
-    // lower valance intake and round fog lamps
-    g.trim.push(onFace(s, 1, 0, 0.24, 0.01, rbox(1.1, 0.07, 0.06, 0.02)));
-    for (const x of [0.62, -0.62]) {
-      g.chrome.push(onFace(s, 1, x, 0.42, -0.01, new TorusGeometry(0.045, 0.01, 6, 18)));
-      g.glass.push(onFace(s, 1, x, 0.42, 0.0, new CircleGeometry(0.045, 18)));
-      g.light.push(onFace(s, 1, x, 0.42, 0.006, new CircleGeometry(0.018, 10)));
+/** A diagonal (honeycomb-like) mesh across a convex opening, clipped to it. */
+function meshFill(s: Surface, proj: Projector, outline: [number, number][], pitch: number, width: number, bucket: BufferGeometry[], off = 0.005) {
+  const xs = outline.map((p) => p[0]);
+  const ys = outline.map((p) => p[1]);
+  const x0 = Math.min(...xs);
+  const x1 = Math.max(...xs);
+  const y0 = Math.min(...ys);
+  const y1 = Math.max(...ys);
+  const inside = (x: number, y: number) => {
+    // point in polygon (even-odd)
+    let c = false;
+    for (let i = 0, j = outline.length - 1; i < outline.length; j = i++) {
+      const [xi, yi] = outline[i];
+      const [xj, yj] = outline[j];
+      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
     }
+    return c;
+  };
+  for (const sgn of [1, -1]) {
+    for (let k = x0 - (y1 - y0); k <= x1 + (y1 - y0); k += pitch) {
+      // line x = k + sgn * (y - y0): keep the part inside the outline, slightly inset
+      const pts: [number, number][] = [];
+      for (let t = 0; t <= 24; t++) {
+        const y = y0 + ((y1 - y0) * t) / 24;
+        const x = k + sgn * (y - y0);
+        if (inside(x, y)) pts.push([x, y]);
+      }
+      if (pts.length < 3) continue;
+      const a = pts[1];
+      const b = pts[pts.length - 2];
+      bucket.push(conformStrip(s, [a, b], width, proj, { off, step: 0.03 }));
+    }
+  }
+}
+
+export function frontPart(id: string, shell: ShellInfo): PartGeo {
+  const g = emptyPart();
+  const s = shell.surface;
+  const N = shell.nose;
+  const h = N.top - N.bottom;
+  const fy = (k: number) => N.bottom + h * k;
+  const F = face(1);
+  if (id === 'muscle') {
+    // full-width recessed grille in a chrome surround, vertical bars, a badge and a chrome bumper bar
+    const gy = fy(0.36);
+    const gw = Math.min(0.68, N.ws * 0.74);
+    const gh = Math.min(0.15, h * 0.3);
+    const outline = roundRect(0, gy, gw * 2, gh, 0.035);
+    g.trim.push(conform(s, outline, F, { off: 0.003, rings: 3, step: 0.04 }));
+    g.chrome.push(conformBand(s, roundRect(0, gy, gw * 2 + 0.05, gh + 0.045, 0.05), F, { inner: roundRect(0, gy, gw * 2, gh, 0.035), off: 0.012, offInner: 0.006, wall: 0.012 }));
+    for (let i = -7; i <= 7; i++) {
+      if (i === 0) continue;
+      g.chrome.push(conformStrip(s, [[i * gw * 0.13, gy - gh * 0.4], [i * gw * 0.13, gy + gh * 0.4]], 0.012, F, { off: 0.008, wall: 0.006 }));
+    }
+    g.chrome.push(conformStrip(s, [[-gw, gy], [gw, gy]], 0.014, F, { off: 0.011, wall: 0.008 }));
+    g.chrome.push(conform(s, ellipse(0, gy, 0.05, 0.036, 20), F, { off: 0.016, wall: 0.012, rings: 2 }));
+    g.paint.push(zoned(conform(s, ellipse(0, gy, 0.036, 0.024, 16), F, { off: 0.019, rings: 2 }), ZONE.front));
+    // chrome bumper bar with over-riders, just under the grille
+    const by = fy(0.1);
+    const fz = s.faceZ(0, by, 1, N.tip).z;
+    const barW = N.ws * 1.62;
+    const bar = new CylinderGeometry(0.032, 0.032, barW, 16);
+    place(bar, [0, by, fz + 0.045], [0, 0, Math.PI / 2]);
+    g.chrome.push(bar);
+    for (const sx of [barW / 2, -barW / 2]) g.chrome.push(place(new SphereGeometry(0.032, 12, 8), [sx, by, fz + 0.045]));
+    for (const x of [0.3, -0.3]) g.chrome.push(place(rbox(0.06, 0.12, 0.08, 0.025, 2), [x, by + 0.01, fz + 0.06]));
+    // lower valance intake and round fog lamps
+    g.trim.push(conform(s, roundRect(0, fy(0.0) + 0.03, 0.9, 0.05, 0.022), F, { off: 0.003, step: 0.05 }));
   } else if (id === 'aggressive') {
     // carbon splitter following the nose, with end plates
-    g.carbon.push(splitter(s, 0.2, 0.78, 0.07, 0.3, 0.02));
-    for (const x of [0.79, -0.79]) {
+    g.carbon.push(splitter(s, 0.2, 0.8, 0.075, 0.3, 0.02));
+    for (const x of [0.81, -0.81]) {
       const z = s.faceZ(x * 0.9, 0.24, 1, 2.0).z;
-      g.carbon.push(plateZY([[z + 0.06, 0.18], [z - 0.2, 0.18], [z - 0.2, 0.3], [z - 0.02, 0.27]], 0.015, x));
+      g.carbon.push(plateZY([[z + 0.06, 0.18], [z - 0.24, 0.18], [z - 0.24, 0.31], [z - 0.02, 0.27]], 0.015, x));
     }
-    // big centre intake with mesh and side intakes with canards
-    const ci: BufferGeometry[] = [];
-    for (const m of meshGrille(0.62, 0.11, ci)) g.trim.push(onFace(s, 1, 0, 0.29, 0.025, m));
-    for (const b of ci) g.carbon.push(onFace(s, 1, 0, 0.29, 0.025, b));
-    for (const x of [0.52, -0.52]) {
+    // a big trapezoid centre intake with a diagonal mesh
+    const iy = fy(0.3);
+    const ih = Math.min(0.15, h * 0.42);
+    const mouth: [number, number][] = soften(
+      [
+        [0.38, iy - ih / 2],
+        [0.27, iy + ih / 2],
+        [-0.27, iy + ih / 2],
+        [-0.38, iy - ih / 2],
+      ],
+      0.2,
+    );
+    g.trim.push(conform(s, mouth, F, { off: 0.005, rings: 4, step: 0.03 }));
+    meshFill(s, F, mouth, 0.05, 0.007, g.carbon, 0.01);
+    g.carbon.push(conformBand(s, mouth, F, { shrink: 1.08, off: 0.008, offInner: 0.008, wall: 0.008 }));
+    // side intakes: angular blades sweeping up into the corners, with a carbon vane
+    const sm = new Vector3(0.63, iy, 2);
+    const SP = planar(sm, new Vector3(-0.45, 0, -1));
+    const sideMouth: [number, number][] = soften(
+      [
+        [-0.16, -ih / 2],
+        [0.13, -ih / 2 + 0.01],
+        [0.14, ih * 0.65],
+        [-0.05, ih * 0.15],
+      ],
+      0.18,
+    );
+    g.trim.push(...both(conform(s, sideMouth, SP, { off: 0.005, rings: 3 })));
+    g.carbon.push(...both(conformStrip(s, [[-0.08, -ih / 2 + 0.01], [0.1, ih * 0.4]], 0.012, SP, { off: 0.01, wall: 0.008 })));
+    // canards on the corners
+    for (const x of [0.79, -0.79]) {
       const side = x > 0 ? 1 : -1;
-      g.trim.push(onFace(s, 1, x, 0.3, 0.03, rbox(0.3, 0.12, 0.06, 0.03), [0, 0, side * -0.18]));
-      const z = s.faceZ(x * 1.55, 0.36, 1, 2.0).z;
-      g.carbon.push(place(rbox(0.2, 0.012, 0.15, 0.005), [x * 1.55, 0.37, z - 0.08], [0, 0, side * 0.22]));
+      const z = s.faceZ(x * 0.97, fy(0.45), 1, 2.0).z;
+      g.carbon.push(place(rbox(0.2, 0.012, 0.16, 0.005), [x * 1.02, fy(0.45), z - 0.07], [0, side * 0.35, side * 0.2]));
     }
-    // vertical air curtains in the corners
-    for (const x of [0.74, -0.74]) g.trim.push(onFace(s, 1, x, 0.33, 0.03, rbox(0.04, 0.14, 0.05, 0.015)));
   } else {
-    // classic: oval grille with a chrome bar, fog lamps and a slim lip
-    const grille: BufferGeometry[] = [];
-    for (const m of meshGrille(0.6, 0.12, grille)) g.trim.push(onFace(s, 1, 0, 0.38, 0.02, m));
-    for (const b of grille) g.trim.push(onFace(s, 1, 0, 0.38, 0.02, b));
-    g.chrome.push(onFace(s, 1, 0, 0.38, -0.005, new TorusGeometry(0.3, 0.008, 4, 40).scale(1, 0.26, 1)));
-    g.chrome.push(onFace(s, 1, 0, 0.395, -0.012, rbox(0.62, 0.014, 0.02, 0.005)));
-    g.chrome.push(onFace(s, 1, 0, 0.395, -0.024, cyl(0.03, 0.01, 16).rotateX(Math.PI / 2)));
-    for (const x of [0.58, -0.58]) {
-      g.trim.push(onFace(s, 1, x, 0.31, 0.02, rbox(0.2, 0.07, 0.05, 0.03)));
-      g.glass.push(onFace(s, 1, x, 0.31, -0.008, new CircleGeometry(0.028, 14)));
-      g.light.push(onFace(s, 1, x, 0.31, -0.01, new CircleGeometry(0.012, 8)));
+    // classic: an oval mouth in a chrome bezel with fine bars, a badge, fog lamps and a slim lip
+    const my = fy(0.32);
+    const rw = Math.min(0.32, N.ws * 0.38);
+    const rh = Math.min(0.085, h * 0.22);
+    g.trim.push(conform(s, ellipse(0, my, rw, rh, 32), F, { off: 0.003, rings: 3 }));
+    g.chrome.push(conformBand(s, ellipse(0, my, rw + 0.022, rh + 0.02, 32), F, { inner: ellipse(0, my, rw, rh, 32), off: 0.011, offInner: 0.007, wall: 0.01 }));
+    bars(s, F, 0, my, (dy) => rw * Math.sqrt(Math.max(0, 1 - (dy / rh) ** 2)) - 0.012, rh * 2, 5, 0.008, g.chrome);
+    g.chrome.push(conformStrip(s, [[-rw * 0.25, my], [rw * 0.25, my]], 0.01, F, { off: 0.012, wall: 0.008 }));
+    g.chrome.push(conform(s, ellipse(0, my + rh + 0.06, 0.035, 0.024, 18), F, { off: 0.009, wall: 0.008, rings: 2 }));
+    for (const x of [0.6, -0.6]) {
+      if (x * x > (N.ws * 0.85) ** 2) continue;
+      g.trim.push(conform(s, roundRect(x, fy(0.2), 0.17, 0.06, 0.03), F, { off: 0.003, rings: 2 }));
+      g.light.push(conform(s, ellipse(x, fy(0.2), 0.026, 0.026, 14), F, { off: 0.007, rings: 2 }));
     }
-    g.trim.push(splitter(s, 0.24, 0.66, 0.025, 0.12, 0.02));
+    g.trim.push(splitter(s, 0.24, 0.68, 0.025, 0.12, 0.02));
   }
   return g;
 }
 
 // ---------------------------------------------------------------- rear details
 
-export function rearPart(id: string, s: Surface): PartGeo {
+export function rearPart(id: string, shell: ShellInfo): PartGeo {
   const g = emptyPart();
+  const s = shell.surface;
+  const T = shell.tail;
+  const h = T.top - T.bottom;
+  const ty = (k: number) => T.bottom + h * k;
+  const B = face(-1);
   if (id === 'kamm') {
-    // duck-tail lip
-    const lipZ = s.faceZ(0, 0.82, -1, -2.1).z;
-    g.paint.push(zoned(plateZY([[lipZ + 0.2, 0.86], [lipZ - 0.06, 0.92], [lipZ - 0.07, 0.9], [lipZ + 0.02, 0.84]], 1.42, 0, 0.01), ZONE.rear));
-    // four round tail lamps: lit ring, dark centre, chrome bezel
-    for (const x of [0.66, 0.42]) {
+    // duck-tail lip along the cut
+    const lipZ = s.faceZ(0, T.top - 0.03, -1, T.tip).z;
+    const ly = T.top - 0.01;
+    g.paint.push(zoned(plateZY([[lipZ + 0.22, ly - 0.005], [lipZ - 0.07, ly + 0.06], [lipZ - 0.08, ly + 0.04], [lipZ + 0.02, ly - 0.03]], T.ws * 1.5, 0, 0.012), ZONE.rear));
+    // a gloss black tail panel carrying four round lamps: lit ring, dark centre, chrome bezel
+    const ly2 = ty(0.62);
+    g.trim.push(conform(s, roundRect(0, ly2, Math.min(1.6, T.ws * 1.75), 0.2, 0.06), B, { off: 0.003, rings: 3, step: 0.05 }));
+    for (const x of [0.64, 0.4]) {
       for (const sx of [x, -x]) {
-        g.chrome.push(onFace(s, -1, sx, 0.66, 0.0, new TorusGeometry(0.085, 0.014, 6, 22)));
-        g.tail.push(onFace(s, -1, sx, 0.66, -0.004, new TorusGeometry(0.055, 0.02, 6, 22)));
-        g.trim.push(onFace(s, -1, sx, 0.66, 0.0, new CircleGeometry(0.075, 20)));
-        g.tail.push(onFace(s, -1, sx, 0.66, -0.008, new CircleGeometry(0.018, 10)));
+        g.chrome.push(conformBand(s, ellipse(sx, ly2, 0.085, 0.085, 24), B, { shrink: 0.82, off: 0.012, offInner: 0.008, wall: 0.012 }));
+        g.tail.push(conformBand(s, ellipse(sx, ly2, 0.068, 0.068, 24), B, { shrink: 0.55, off: 0.009 }));
+        g.trim.push(conform(s, ellipse(sx, ly2, 0.038, 0.038, 16), B, { off: 0.006, rings: 2 }));
+        g.tail.push(conform(s, ellipse(sx, ly2, 0.014, 0.014, 10), B, { off: 0.01, rings: 1 }));
       }
     }
-    // full-width bumper with a lower diffuser hint and reverse lamps
-    g.trim.push(onFace(s, -1, 0, 0.3, 0.02, rbox(1.5, 0.14, 0.08, 0.03)));
-    for (let i = -3; i <= 3; i++) g.trim.push(onFace(s, -1, i * 0.12, 0.25, -0.03, rbox(0.012, 0.08, 0.12, 0.004)));
-    for (const x of [0.3, -0.3]) g.light.push(onFace(s, -1, x, 0.47, -0.002, rbox(0.12, 0.03, 0.02, 0.008)));
-    g.chrome.push(onFace(s, -1, 0, 0.55, -0.002, rbox(0.24, 0.02, 0.012, 0.006)));
+    // full-width bumper with vertical strakes, reverse lamps and a plate recess
+    g.chrome.push(conformStrip(s, [[-T.ws * 0.86, ty(0.24)], [T.ws * 0.86, ty(0.24)]], 0.03, B, { off: 0.016, wall: 0.016, step: 0.05 }));
+    g.trim.push(conform(s, roundRect(0, ty(0.04) + 0.02, Math.min(1.3, T.ws * 1.4), 0.07, 0.03), B, { off: 0.004, step: 0.05 }));
+    for (let i = -3; i <= 3; i++) g.carbon.push(conformStrip(s, [[i * 0.12, ty(0.0) + 0.0], [i * 0.12, ty(0.1)]], 0.012, B, { off: 0.012, wall: 0.01 }));
+    for (const x of [0.25, -0.25]) g.light.push(conform(s, roundRect(x, ty(0.36), 0.12, 0.03, 0.012), B, { off: 0.006, rings: 2 }));
+    g.trim.push(conform(s, roundRect(0, ty(0.36), 0.3, 0.09, 0.012), B, { off: 0.004, rings: 2 }));
+    g.chrome.push(conformStrip(s, [[-0.12, ty(0.85)], [0.12, ty(0.85)]], 0.016, B, { off: 0.006, wall: 0.004 }));
   } else if (id === 'diffuser') {
-    // slim light bar with a dark frame across the tail
-    g.trim.push(onFace(s, -1, 0, 0.64, 0.0, rbox(1.44, 0.075, 0.04, 0.02)));
-    g.tail.push(onFace(s, -1, 0, 0.645, -0.008, rbox(1.38, 0.028, 0.03, 0.01)));
-    for (const x of [0.6, -0.6]) g.tail.push(onFace(s, -1, x, 0.62, -0.01, rbox(0.18, 0.02, 0.02, 0.008)));
-    // rain light
-    g.tail.push(onFace(s, -1, 0, 0.36, -0.03, rbox(0.12, 0.05, 0.03, 0.01)));
+    // a slim light blade across a dark tail panel, ending in C-shaped lamp signatures
+    const ly = ty(0.7);
+    const span = Math.min(0.7, T.ws * 0.82);
+    g.trim.push(conform(s, roundRect(0, ly, span * 2 + 0.1, 0.11, 0.04), B, { off: 0.003, rings: 3, step: 0.05 }));
+    g.tail.push(conformStrip(s, [[-span, ly], [span, ly]], 0.018, B, { off: 0.008, wall: 0.006 }));
+    for (const sx of [1, -1]) {
+      const c: [number, number][] = [
+        [sx * (span - 0.02), ly + 0.04],
+        [sx * (span + 0.03), ly + 0.035],
+        [sx * (span + 0.045), ly],
+        [sx * (span + 0.03), ly - 0.035],
+        [sx * (span - 0.02), ly - 0.04],
+      ];
+      g.tail.push(conformStrip(s, c, 0.016, B, { off: 0.009, wall: 0.006 }));
+    }
+    // the lower tail is open: a dark mesh panel the full width, with the rain light in it
+    const panel = roundRect(0, ty(0.33), span * 2 + 0.06, h * 0.36, 0.05);
+    g.trim.push(conform(s, panel, B, { off: 0.004, rings: 4, step: 0.04 }));
+    meshFill(s, B, roundRect(0, ty(0.33), span * 2 + 0.02, h * 0.32, 0.04), 0.045, 0.006, g.carbon, 0.009);
+    g.tail.push(conform(s, roundRect(0, ty(0.33), 0.14, 0.05, 0.012), B, { off: 0.012, rings: 2, wall: 0.008 }));
     // diffuser: carbon floor rising to the tail with tall strakes
-    const tailZ = s.faceZ(0, 0.4, -1, -2.14).z;
-    const floor = new BoxGeometry(1.2, 0.02, 0.62);
+    const tailZ = s.faceZ(0, ty(0.2), -1, T.tip).z;
+    const floor = new BoxGeometry(1.18, 0.02, 0.62);
     place(floor, [0, 0.235, tailZ + 0.22], [-0.22, 0, 0]);
     g.carbon.push(floor);
     for (let i = -3; i <= 3; i++) {
-      g.carbon.push(plateZY([[tailZ + 0.42, 0.24], [tailZ - 0.06, 0.2], [tailZ - 0.06, 0.38], [tailZ + 0.3, 0.3]], 0.012, i * 0.2));
+      g.carbon.push(plateZY([[tailZ + 0.42, 0.245], [tailZ - 0.035, 0.205], [tailZ - 0.03, 0.33], [tailZ + 0.12, 0.33], [tailZ + 0.3, 0.29]], 0.012, i * 0.2));
     }
-    g.trim.push(onFace(s, -1, 0, 0.47, 0.01, rbox(1.2, 0.1, 0.05, 0.03)));
+    g.carbon.push(conformStrip(s, [[-T.ws * 0.8, ty(0.12)], [T.ws * 0.8, ty(0.12)]], 0.02, B, { off: 0.014, wall: 0.014, step: 0.05 }));
   } else {
-    // tapered: wrap-around light bar following the tail, chrome strip above
-    for (let i = -6; i <= 6; i++) {
-      const x = i * 0.1;
-      g.tail.push(onFace(s, -1, x, 0.66, -0.004, rbox(0.094, 0.04, 0.03, 0.01)));
+    // tapered: a wrap-around light bar following the tail, over a black fascia, chrome strip above
+    const ly = ty(0.66);
+    const W = wrap(-1, -1.2);
+    const span = 1.0;
+    g.trim.push(conformStrip(s, [[-span, ly], [span, ly]], 0.07, W, { off: 0.004, step: 0.04 }));
+    g.tail.push(conformStrip(s, [[-span + 0.03, ly + 0.008], [span - 0.03, ly + 0.008]], 0.026, W, { off: 0.009, wall: 0.006, step: 0.03 }));
+    for (const sx of [1, -1]) {
+      g.tail.push(conformStrip(s, [[sx * (span - 0.03), ly - 0.02], [sx * (span - 0.2), ly - 0.02]], 0.012, W, { off: 0.009, wall: 0.005 }));
     }
-    g.trim.push(onFace(s, -1, 0, 0.66, 0.0, rbox(1.3, 0.055, 0.03, 0.02)));
-    g.chrome.push(onFace(s, -1, 0, 0.705, -0.004, rbox(1.0, 0.012, 0.02, 0.005)));
+    g.chrome.push(conformStrip(s, [[-span * 0.8, ly + 0.055], [span * 0.8, ly + 0.055]], 0.01, W, { off: 0.006, wall: 0.004, step: 0.04 }));
     // bumper, plate recess, reverse lamps and a small diffuser
-    g.trim.push(onFace(s, -1, 0, 0.34, 0.03, rbox(1.2, 0.12, 0.08, 0.04)));
-    g.trim.push(onFace(s, -1, 0, 0.5, 0.025, rbox(0.42, 0.11, 0.05, 0.015)));
-    for (const x of [0.36, -0.36]) g.light.push(onFace(s, -1, x, 0.48, -0.004, rbox(0.1, 0.025, 0.02, 0.008)));
-    for (let i = -2; i <= 2; i++) g.carbon.push(onFace(s, -1, i * 0.14, 0.27, -0.02, rbox(0.012, 0.07, 0.1, 0.004)));
+    g.carbon.push(conformStrip(s, [[-T.ws * 0.7, ty(0.06)], [T.ws * 0.7, ty(0.06)]], 0.03, B, { off: 0.01, wall: 0.012, step: 0.05 }));
+    g.trim.push(conform(s, roundRect(0, ty(0.42), 0.4, 0.1, 0.015), B, { off: 0.004, rings: 2 }));
+    for (const x of [0.33, -0.33]) g.light.push(conform(s, roundRect(x, ty(0.42), 0.1, 0.026, 0.01), B, { off: 0.006, rings: 2 }));
+    for (let i = -2; i <= 2; i++) g.carbon.push(conformStrip(s, [[i * 0.14, ty(0.12)], [i * 0.14, ty(0.27)]], 0.012, B, { off: 0.014, wall: 0.008 }));
   }
   return g;
 }
@@ -898,18 +936,25 @@ export function hoodPart(id: string, surface: Surface, hoodStart: number, hoodEn
       g.trim.push(place(rbox(0.16, 0.02, 0.2, 0.008), [x, topAt(x, zc) + 0.003, zc], [slope(x, zc - 0.1, zc + 0.1), 0, 0]));
     }
   } else if (id === 'vented') {
-    for (const x of [0.33, -0.33]) {
-      const zc = z0 + len * 0.55;
-      const vlen = Math.min(0.46, len * 0.75);
-      const y = topAt(x, zc);
-      const rot: [number, number, number] = [slope(x, zc - 0.15, zc + 0.15), 0, 0];
-      g.carbon.push(place(rbox(0.36, 0.028, vlen, 0.012), [x, y + 0.004, zc], rot));
-      g.trim.push(place(rbox(0.3, 0.02, vlen - 0.06, 0.008), [x, y + 0.012, zc], rot));
-      const n = 7;
-      for (let k = 0; k < n; k++) {
-        const zz = zc - vlen / 2 + 0.05 + (k * (vlen - 0.1)) / (n - 1);
-        g.carbon.push(place(rbox(0.29, 0.008, 0.045, 0.003), [x, topAt(x, zz) + 0.024, zz], [rot[0] - 0.5, 0, 0]));
-      }
+    // two carbon-framed extractor vents riding on the wings either side of the valley
+    const zc = z0 + len * 0.55;
+    const vlen = Math.min(0.46, len * 0.75);
+    const A = above();
+    const vent: [number, number][] = soften(
+      [
+        [0.18, zc + vlen / 2],
+        [0.48, zc + vlen / 2 - 0.05],
+        [0.47, zc - vlen / 2],
+        [0.2, zc - vlen / 2 + 0.03],
+      ],
+      0.18,
+    );
+    g.carbon.push(...both(conformBand(surface, vent, A, { shrink: 0.86, off: 0.012, offInner: 0.008, wall: 0.014, step: 0.04 })));
+    g.trim.push(...both(conform(surface, vent, A, { off: 0.004, rings: 3, step: 0.04 })));
+    const n = 7;
+    for (let k = 0; k < n; k++) {
+      const zz = zc - vlen / 2 + 0.06 + (k * (vlen - 0.12)) / (n - 1);
+      g.carbon.push(...both(conformStrip(surface, [[0.22, zz], [0.45, zz - 0.01]], 0.022, A, { off: 0.011, wall: 0.008 })));
     }
     // centre power crease
     const secs: Section[] = [];
@@ -1054,43 +1099,63 @@ export function spoilerPart(id: string, surface: Surface): PartGeo {
 
 // ---------------------------------------------------------------- headlights
 
-export function headlightPart(id: string, front: Surface): PartGeo {
+export function headlightPart(id: string, shell: ShellInfo): PartGeo {
   const g = emptyPart();
-  const { x, y } = SKELETON.headlight;
-  const hit = front.faceZ(x, y, 1, 2.0);
+  const s = shell.surface;
+  const N = shell.nose;
+  // the lamps ride high in the corners of whatever nose is fitted
+  const lx = Math.min(0.62, N.ws * 0.6);
+  const ly = N.bottom + (N.top - N.bottom) * 0.66;
+  const hit = s.faceZ(lx, ly, 1, N.tip);
   const n = hit.normal.clone();
-  // orient each unit roughly with the surface (yaw + pitch), mirrored for the left side
-  const yaw = Math.atan2(n.x, Math.max(0.2, n.z));
-  const pitch = -Math.atan2(n.y, Math.max(0.2, n.z));
-  const add = (geo: BufferGeometry, bucket: BufferGeometry[], off: [number, number, number], extraRot: [number, number, number] = [0, 0, 0]) => {
-    const p = new Vector3(x, y, hit.z).add(new Vector3(...off));
-    place(geo, p, [pitch + extraRot[0], yaw + extraRot[1], extraRot[2]]);
-    bucket.push(...both(geo));
-  };
+  // project along a blend of the local normal and straight back, so the outline lands undistorted
+  const dir = n.clone().negate().multiplyScalar(0.55).add(new Vector3(0, 0, -0.45)).normalize();
+  const P = planar(new Vector3(lx, ly, hit.z), dir, new Vector3(1, 0, 0), new Vector3(0, 1, 0));
+  const R = (pts: [number, number][], bucket: BufferGeometry[], opts: Parameters<typeof conform>[3]) => bucket.push(...both(conform(s, pts, P, opts)));
+  const S = (path: [number, number][], w: number, bucket: BufferGeometry[], opts: Parameters<typeof conformStrip>[4]) => bucket.push(...both(conformStrip(s, path, w, P, opts)));
   if (id === 'round') {
-    add(rbox(0.4, 0.17, 0.1, 0.06), g.trim, [0, 0, -0.035]);
-    add(rbox(0.36, 0.13, 0.02, 0.05), g.chrome, [0, 0, 0.008]);
-    for (const dx of [-0.09, 0.09]) {
-      // reflector cup, projector lens and a chrome ring
-      const cup = new LatheGeometry([new Vector2(0.02, -0.02), new Vector2(0.045, 0.0), new Vector2(0.062, 0.025)], 18);
-      add(cup.rotateX(Math.PI / 2), g.chrome, [dx, 0, 0.0]);
-      const lens = new SphereGeometry(0.04, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2);
-      add(lens.rotateX(Math.PI / 2), g.light, [dx, 0, 0.006]);
-      add(new TorusGeometry(0.064, 0.009, 6, 22), g.chrome, [dx, 0, 0.028]);
+    // an almond-shaped housing with two projectors in chrome cups, and a light brow over them
+    const house = soften(
+      [
+        [-0.2, -0.05],
+        [0.12, -0.065],
+        [0.215, 0.0],
+        [0.18, 0.062],
+        [-0.17, 0.05],
+      ],
+      0.35,
+    );
+    R(house, g.trim, { off: 0.004, wall: 0.012, rings: 3, step: 0.02 });
+    g.chrome.push(...both(conformBand(s, house, P, { shrink: 1.07, off: 0.01, offInner: 0.008, wall: 0.01, step: 0.02 })));
+    for (const dx of [-0.085, 0.085]) {
+      R(ellipse(dx, -0.002, 0.05, 0.046, 22), g.chrome, { off: 0.007, rings: 2 });
+      R(ellipse(dx, -0.002, 0.03, 0.028, 18), g.light, { off: 0.011, wall: 0.004, rings: 2 });
+      g.chrome.push(...both(conformBand(s, ellipse(dx, -0.002, 0.052, 0.048, 22), P, { shrink: 0.88, off: 0.013, offInner: 0.01 })));
     }
-    // amber-free DRL ring under the lamps
-    add(rbox(0.3, 0.01, 0.01, 0.004), g.light, [0, -0.065, 0.03]);
+    S([[-0.17, 0.038], [0.0, 0.048], [0.17, 0.045]], 0.01, g.light, { off: 0.011, wall: 0.005 });
   } else if (id === 'slit') {
-    add(rbox(0.44, 0.1, 0.1, 0.03), g.trim, [0, 0.01, -0.035], [0, 0, 0.14]);
-    add(rbox(0.38, 0.05, 0.02, 0.012), g.chrome, [0.0, 0.008, 0.008], [0, 0, 0.14]);
-    add(rbox(0.36, 0.02, 0.03, 0.008), g.light, [0, 0.022, 0.018], [0, 0, 0.14]);
-    add(rbox(0.12, 0.016, 0.03, 0.006), g.light, [0.13, -0.022, 0.018], [0, 0, -0.5]);
-    for (const dx of [-0.11, -0.03, 0.05]) add(cyl(0.012, 0.02, 10).rotateX(Math.PI / 2), g.light, [dx, -0.008 + dx * 0.14, 0.02]);
+    // an angular slit with a hooked daytime-light signature
+    const house: [number, number][] = [
+      [-0.22, 0.0],
+      [-0.18, 0.04],
+      [0.18, 0.075],
+      [0.235, 0.05],
+      [0.2, -0.0],
+      [0.02, -0.03],
+      [-0.12, -0.032],
+    ];
+    R(soften(house, 0.15), g.trim, { off: 0.004, wall: 0.012, rings: 3, step: 0.02 });
+    S([[-0.17, 0.028], [0.17, 0.062], [0.215, 0.045]], 0.012, g.light, { off: 0.011, wall: 0.005 });
+    S([[0.19, 0.03], [0.1, -0.005], [-0.02, -0.012]], 0.009, g.light, { off: 0.011, wall: 0.005 });
+    for (const dx of [-0.11, -0.04, 0.03]) R(ellipse(dx, 0.008 + dx * 0.1, 0.018, 0.016, 14), g.light, { off: 0.009, rings: 1 });
+    R(roundRect(0.0, 0.012, 0.26, 0.022, 0.01, 0.12), g.chrome, { off: 0.006, rings: 1 });
   } else {
-    add(rbox(0.48, 0.085, 0.1, 0.035), g.trim, [0, 0, -0.035]);
-    add(rbox(0.44, 0.05, 0.02, 0.02), g.chrome, [0, -0.004, 0.006]);
-    add(rbox(0.43, 0.018, 0.03, 0.008), g.light, [0, 0.022, 0.016]);
-    for (let k = 0; k < 4; k++) add(cyl(0.013, 0.02, 10).rotateX(Math.PI / 2), g.light, [-0.15 + k * 0.05, -0.012, 0.02]);
+    // LED bar: a slim swept blade with a lit top edge and four LED elements under it
+    const house = roundRect(0, 0, 0.46, 0.075, 0.034, 0.12);
+    R(house, g.trim, { off: 0.004, wall: 0.012, rings: 3, step: 0.02 });
+    S([[-0.2, 0.019], [0.21, 0.023]], 0.012, g.light, { off: 0.011, wall: 0.005 });
+    R(roundRect(0.0, -0.012, 0.38, 0.026, 0.012, 0.12), g.chrome, { off: 0.007, rings: 1 });
+    for (let k = 0; k < 4; k++) R(ellipse(-0.13 + k * 0.075, -0.012, 0.014, 0.011, 12), g.light, { off: 0.011, rings: 1 });
   }
   return g;
 }
@@ -1103,9 +1168,11 @@ export interface ExhaustInfo {
   tips: Vector3[];
 }
 
-export function exhaustPart(id: string, rear: Surface): ExhaustInfo {
+export function exhaustPart(id: string, shell: ShellInfo): ExhaustInfo {
   const g = emptyPart();
-  const y = SKELETON.exhaustY;
+  const rear = shell.surface;
+  // pipes exit through the tail face, however high the tail's bottom edge sits
+  const y = Math.max(SKELETON.exhaustY, shell.tail.bottom + 0.1);
   const xs = id === 'quad' ? [0.4, 0.56, -0.4, -0.56] : id === 'center' ? [-0.09, 0.09] : [0.5, -0.5];
   const r = id === 'center' ? 0.075 : id === 'quad' ? 0.042 : 0.055;
   const tips: Vector3[] = [];
@@ -1152,10 +1219,13 @@ export function flameGeometry(): BufferGeometry {
 
 // ---------------------------------------------------------------- wheels
 
+/** Rim radius: big wheels on low-profile tyres. */
+const RIM_R = 0.262;
+
 export function tireGeometry(): BufferGeometry {
   const R = SKELETON.wheelRadius;
   const W = SKELETON.wheelWidth;
-  const rim = 0.245;
+  const rim = RIM_R;
   const hw = W / 2 - 0.01;
   const pts: Vector2[] = [];
   const side = (sgn: number, t: number) => new Vector2(rim + 0.015 + (R - rim - 0.045) * t, sgn * (hw + Math.sin(t * Math.PI) * 0.012));
@@ -1189,7 +1259,7 @@ export function tireGeometry(): BufferGeometry {
 export function rimGeometry(id: string): { main: BufferGeometry[]; accent: BufferGeometry[] } {
   const main: BufferGeometry[] = [];
   const accent: BufferGeometry[] = [];
-  const R = 0.245;
+  const R = RIM_R;
   const face = 0.1;
   // stepped barrel with a polished outer lip
   const barrel = new LatheGeometry(
@@ -1229,14 +1299,14 @@ export function rimGeometry(id: string): { main: BufferGeometry[]; accent: Buffe
     for (let i = 0; i < 12; i++) {
       for (const s of [1, -1]) {
         const a = (i / 12) * Math.PI * 2;
-        const sp = new BoxGeometry(0.016, 0.19, 0.013);
-        sp.translate(0, 0.135, 0);
+        const sp = new BoxGeometry(0.016, 0.205, 0.013);
+        sp.translate(0, 0.145, 0);
         sp.rotateX(a + s * 0.2);
         sp.translate(face - 0.005 + (s > 0 ? 0.004 : 0), 0, 0);
         main.push(sp);
       }
     }
-    const ring = new TorusGeometry(0.16, 0.008, 4, 36).rotateY(Math.PI / 2);
+    const ring = new TorusGeometry(0.172, 0.008, 4, 36).rotateY(Math.PI / 2);
     ring.translate(face, 0, 0);
     main.push(ring);
   } else if (id === 'turbine') {
@@ -1245,12 +1315,12 @@ export function rimGeometry(id: string): { main: BufferGeometry[]; accent: Buffe
     accent.push(disc);
     for (let i = 0; i < 14; i++) {
       const a = (i / 14) * Math.PI * 2;
-      const b = new BoxGeometry(0.035, 0.16, 0.035);
+      const b = new BoxGeometry(0.035, 0.172, 0.035);
       const p = b.getAttribute('position');
-      for (let k = 0; k < p.count; k++) p.setZ(k, p.getZ(k) * (0.5 + (p.getY(k) + 0.08) * 6));
+      for (let k = 0; k < p.count; k++) p.setZ(k, p.getZ(k) * (0.5 + (p.getY(k) + 0.086) * 5.6));
       b.computeVertexNormals();
       b.rotateY(0.65);
-      b.translate(0, 0.145, 0);
+      b.translate(0, 0.156, 0);
       b.rotateX(a);
       b.translate(face - 0.005, 0, 0);
       main.push(b);
@@ -1260,15 +1330,15 @@ export function rimGeometry(id: string): { main: BufferGeometry[]; accent: Buffe
     for (let i = 0; i < 5; i++) {
       for (const s of [-1, 1]) {
         const a = (i / 5) * Math.PI * 2 + s * 0.13;
-        const sp = new BoxGeometry(0.04, 0.17, 0.028);
+        const sp = new BoxGeometry(0.04, 0.185, 0.028);
         const pos = sp.getAttribute('position');
         for (let k = 0; k < pos.count; k++) {
-          const t = (pos.getY(k) + 0.085) / 0.17;
+          const t = (pos.getY(k) + 0.0925) / 0.185;
           pos.setZ(k, pos.getZ(k) * (1.25 - 0.45 * t) + s * t * 0.012);
           pos.setX(k, pos.getX(k) - t * 0.035);
         }
         sp.computeVertexNormals();
-        sp.translate(0, 0.15, 0);
+        sp.translate(0, 0.162, 0);
         sp.rotateX(a);
         sp.translate(face - 0.005, 0, 0);
         main.push(sp);

@@ -31,9 +31,10 @@ import {
   spoilerPart,
   tireGeometry,
   type PartGeo,
+  type ShellInfo,
 } from './geometry';
 import { ExhaustFx } from './exhaustFx';
-import { createCarMaterials, getSharedMaterials, type CarMaterials } from './materials';
+import { createCarMaterials, getSharedMaterials, type CarMaterials, type PaintLayout } from './materials';
 import type { CarBuild } from './parts';
 import { SKELETON } from './skeleton';
 
@@ -87,29 +88,58 @@ export function mergeAll(list: BufferGeometry[], keepZone = false): BufferGeomet
   if (!list.length) return null;
   const geos = list.map((g) => normalizeGeo(g, keepZone));
   // mixing 16 and 32 bit indices is fine for mergeGeometries, which rebuilds the index
-  const merged = mergeGeometries(geos, false);
-  for (const g of geos) g.dispose();
-  return merged;
+  // the inputs are CPU-only (never uploaded) and may be cached: leave them alone
+  return mergeGeometries(geos, false);
 }
 
-/** Builds all visual part geometry for a build, grouped per material. Pure geometry: usable in tests. */
-export function buildCarGeometry(build: CarBuild) {
-  const shell = shellPart(build.body, build.front, build.rear);
-  const s = shell.surface;
-  const cabin = cabinPart(build.body, shell);
-  const front = frontPart(build.front, s);
-  const rear = rearPart(build.rear, s);
-  const hood = hoodPart(build.hood, s, shell.hoodStart, shell.hoodEnd);
-  const skirts = skirtPart(build.skirts, s);
-  const spoiler = spoilerPart(build.spoiler, s);
-  const lights = headlightPart(build.headlights, s);
-  const exhaust = exhaustPart(build.exhaust, s);
-  const parts: PartGeo[] = [shell.geo, cabin, front, rear, hood, skirts, spoiler, lights, exhaust.geo];
-  const all = emptyPart();
-  for (const p of parts) {
-    for (const k of Object.keys(all) as (keyof PartGeo)[]) all[k].push(...p[k]);
+type CarGeometry = { buckets: PartGeo; exhaustTips: Vector3[]; layout: PaintLayout };
+
+/** Small LRU caches: swapping one part in the garage only rebuilds what that part changes. */
+const shellCache = new Map<string, ShellInfo>();
+const geoCache = new Map<string, CarGeometry>();
+function cached<T>(cache: Map<string, T>, key: string, size: number, make: () => T): T {
+  const hit = cache.get(key);
+  if (hit) {
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit;
   }
-  return { buckets: all, exhaustTips: exhaust.tips, layout: { hoodStart: shell.hoodStart + 0.06, hoodEnd: shell.hoodEnd } };
+  const v = make();
+  cache.set(key, v);
+  while (cache.size > size) cache.delete(cache.keys().next().value!);
+  return v;
+}
+
+/**
+ * Builds all visual part geometry for a build, grouped per material. Pure
+ * geometry: usable in tests. The result is shared between calls with the same
+ * shape, so callers must not change it (merging into new geometry is fine).
+ */
+export function buildCarGeometry(build: CarBuild): CarGeometry {
+  const key = [build.body, build.front, build.rear, build.hood, build.skirts, build.spoiler, build.headlights, build.exhaust].join('|');
+  return cached(geoCache, key, 8, () => {
+    const shell = cached(shellCache, `${build.body}|${build.front}|${build.rear}`, 4, () => shellPart(build.body, build.front, build.rear));
+    const s = shell.surface;
+    const cabin = cabinPart(build.body, shell);
+    const front = frontPart(build.front, shell);
+    const rear = rearPart(build.rear, shell);
+    const hood = hoodPart(build.hood, s, shell.hoodStart, shell.hoodEnd);
+    const skirts = skirtPart(build.skirts, s);
+    const spoiler = spoilerPart(build.spoiler, s);
+    const lights = headlightPart(build.headlights, shell);
+    const exhaust = exhaustPart(build.exhaust, shell);
+    const parts: PartGeo[] = [shell.geo, cabin, front, rear, hood, skirts, spoiler, lights, exhaust.geo];
+    const all = emptyPart();
+    for (const p of parts) {
+      for (const k of Object.keys(all) as (keyof PartGeo)[]) all[k].push(...p[k].map((g) => normalizeGeo(g, k === 'paint')));
+    }
+    const layout: PaintLayout = {
+      hoodStart: shell.hoodStart + 0.06,
+      hoodEnd: shell.hoodEnd,
+      doors: [shell.doors.front, shell.doors.rear, shell.doors.rear - 0.32],
+    };
+    return { buckets: all, exhaustTips: exhaust.tips, layout };
+  });
 }
 
 const _m = new Matrix4();
@@ -234,7 +264,7 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
         const front = i < 2;
         // the arches are cut for this much lock and travel; never draw past it
         const steer = front ? Math.max(-0.6, Math.min(0.6, state.steer)) : 0;
-        _p.set(x, SKELETON.wheelY + Math.max(-0.08, Math.min(0.06, state.travel[i] ?? 0)), z);
+        _p.set(x, SKELETON.wheelY + Math.max(-SKELETON.travelDown, Math.min(SKELETON.travelUp, state.travel[i] ?? 0)), z);
         // left-side wheels are the right-side wheel turned around, so no mirroring is needed
         const flip = side < 0 ? Math.PI : 0;
         _e.set(0, steer + flip, 0, 'YXZ');
