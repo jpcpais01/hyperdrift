@@ -99,6 +99,7 @@ const VERT = /* glsl */ `
   varying vec3 vCam;
   varying vec3 vBox; // half width, length, nozzle radius
   varying float vSeed;
+  varying float vFloor;
 
   void main() {
     float r0 = aInfo.x * uWidth;
@@ -111,6 +112,7 @@ const VERT = /* glsl */ `
     vCam = vec3(c.x, c.y, -c.z);
     vBox = vec3(H, L, r0);
     vSeed = aInfo.y;
+    vFloor = aOrigin.y;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(aOrigin + vec3(pj.x, pj.y, -pj.z), 1.0);
   }
 `;
@@ -128,6 +130,7 @@ const FRAG = /* glsl */ `
   varying vec3 vCam;
   varying vec3 vBox;
   varying float vSeed;
+  varying float vFloor; // nozzle height above the road
 
   float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
@@ -194,6 +197,8 @@ const FRAG = /* glsl */ `
       float dens = 1.0 - smoothstep(0.25, 1.0, edge);
       dens *= 1.0 - smoothstep(0.62, 1.05, tzc + (n - 0.5) * 0.45);
       dens *= smoothstep(-0.02, 0.04, z);
+      // soft contact with the road: the gas thins out as it nears the deck instead of being cut by it
+      dens *= smoothstep(0.0, 0.16, p.y + vFloor);
       if (dens <= 0.001) continue;
       float core = exp(-d * d * 6.0) * (1.0 - smoothstep(0.0, 0.8, tzc));
       // standing shock diamonds: bright knots at fixed spacing in the core
@@ -216,9 +221,12 @@ const GLOW_FRAG = /* glsl */ `
   uniform vec3 uColor;
   varying vec2 vUv;
   void main() {
-    vec2 d = (vUv - vec2(0.5, 0.62)) * vec2(1.6, 1.0);
-    float g = exp(-dot(d, d) * 9.0);
-    gl_FragColor = vec4(uColor * g * uGlow, 1.0);
+    // soft pool that reaches exactly zero well inside the quad, so it never shows an edge
+    vec2 d = (vUv - 0.5) * vec2(2.0, 2.0);
+    float r2 = dot(d, d);
+    float g = (exp(-r2 * 3.5) - exp(-3.5)) / (1.0 - exp(-3.5));
+    g *= 1.0 - smoothstep(0.55, 1.0, sqrt(r2));
+    gl_FragColor = vec4(uColor * max(g, 0.0) * uGlow, 1.0);
   }
 `;
 
@@ -297,7 +305,7 @@ export class ExhaustFx {
     };
 
     // the jet's light pooled on the deck behind the car
-    const gg = new PlaneGeometry(2.6, 3.6);
+    const gg = new PlaneGeometry(3.0, 4.4);
     gg.rotateX(-Math.PI / 2);
     this.glowMat = new ShaderMaterial({
       vertexShader: /* glsl */ `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -309,7 +317,7 @@ export class ExhaustFx {
     });
     this.glow = new Mesh(gg, this.glowMat);
     const z = tips.length ? Math.min(...tips.map((t) => t.z)) : -2.2;
-    this.glow.position.set(0, 0.04, z - 1.2);
+    this.glow.position.set(0, 0.04, z - 1.4);
     this.glow.visible = false;
     this.glow.renderOrder = 1;
   }
@@ -342,7 +350,7 @@ export class ExhaustFx {
     u.uWidth.value = 1 + nitro * 0.25;
     this.flames.visible = intensity > 0.01;
     const glow = Math.max(nitro, boost * 0.6, pop * 0.4);
-    this.glowMat.uniforms.uGlow.value = glow * flicker * (1 + this.igniteEnv);
+    this.glowMat.uniforms.uGlow.value = glow * 0.85 * flicker * (1 + this.igniteEnv);
     this.glowMat.uniforms.uColor.value.copy(BOOST_GLOW).lerp(NITRO_GLOW, Math.min(1, nitro * 1.5 + 0.2 * (1 - pop)));
     this.glow.visible = glow > 0.01;
   }
