@@ -36,9 +36,15 @@ const KEEL_HALF = HALF_WIDTH * 0.45;
 const CHUNK = 220;
 export const RING_SPACING = 12;
 export const PICKUP_RESPAWN = 6;
-/** where the tunnel's rings sit above the road, and their radius */
+/** where the tunnel's rings sit above the road, and their radius (unless the deck rolls round a heartline) */
 export const TUNNEL_CENTRE = 4.5;
 export const TUNNEL_RADIUS = 12.6;
+
+/** The tunnel's axis above this sample's deck and a radius wide enough to clear the deck's edges. */
+function tunnelAxis(smp: { axis: number }) {
+  const axis = smp.axis || TUNNEL_CENTRE;
+  return { axis, radius: Math.max(TUNNEL_RADIUS, Math.hypot(axis, HALF_WIDTH) + 1.6) };
+}
 
 const LEFT_GLOW = new Color(0.15, 0.85, 1.4);
 const RIGHT_GLOW = new Color(1.3, 0.25, 1.0);
@@ -794,7 +800,9 @@ export class TrackView {
         // (right, up, fwd) is left-handed; flip z so the quaternion is a real rotation
         m.makeBasis(smp.right, smp.up, smp.fwd.clone().negate());
         q.setFromRotationMatrix(m);
-        m.compose(smp.pos.clone().addScaledVector(smp.up, TUNNEL_CENTRE), q, new Vector3(1, 1, 1));
+        const { axis, radius } = tunnelAxis(smp);
+        const r = radius / TUNNEL_RADIUS;
+        m.compose(smp.pos.clone().addScaledVector(smp.up, axis), q, new Vector3(r, r, r));
         rings.setMatrixAt(k, m);
         rings.setColorAt(k, this.ringColors[k]);
       });
@@ -819,7 +827,8 @@ export class TrackView {
       const col = new Color();
       for (let i = first; i <= last; i++) {
         const smp = track.sample(i);
-        const c = p.copy(smp.pos).addScaledVector(smp.up, TUNNEL_CENTRE).clone();
+        const { axis, radius } = tunnelAxis(smp);
+        const c = p.copy(smp.pos).addScaledVector(smp.up, axis).clone();
         const fade = Math.min(1, (i - first) / 14, (last - i) / 14);
         col.setHSL((0.52 + ((i - ringS[0]) / RING_SPACING) * 0.035) % 1, 1, 0.5).multiplyScalar(0.55 * Math.max(0, fade));
         const row: number[] = [];
@@ -828,7 +837,7 @@ export class TrackView {
           const dir = nrm.copy(smp.right).multiplyScalar(Math.cos(a)).addScaledVector(smp.up, Math.sin(a));
           // the floor stays clear so the road reads cleanly
           const floor = Math.sin(a) < -0.6 ? 0 : 1;
-          tube.vert(p.copy(c).addScaledVector(dir, TUNNEL_RADIUS - 0.25), dir, k / SIDES, i / 24, 1, black);
+          tube.vert(p.copy(c).addScaledVector(dir, radius - 0.25), dir, k / SIDES, i / 24, 1, black);
           tube.col.splice(tube.col.length - 3, 3, col.r * floor, col.g * floor, col.b * floor);
           row.push(tube.pos.length / 3 - 1);
         }

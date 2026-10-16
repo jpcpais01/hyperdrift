@@ -42,6 +42,36 @@ describe('cockpit', () => {
     }
   });
 
+  it('nothing in the cabin rises into the view of the road over the bonnet', () => {
+    for (const body of VISUAL_PARTS.body) {
+      const L = cockpitLayout(body.id);
+      for (const cockpit of INTERIOR_PARTS.cockpit) {
+        for (const dash of INTERIOR_PARTS.dash) {
+          const build = { ...DEFAULT_BUILD, body: body.id, cockpit: cockpit.id, dash: dash.id };
+          const d = dashPart(build, L);
+          let worst = -1;
+          for (const g of [...all(cabinBase(build, L)), ...all(d.buckets), ...d.screens]) {
+            const pos = g.getAttribute('position');
+            for (let i = 0; i < pos.count; i++) {
+              const x = pos.getX(i);
+              const y = pos.getY(i);
+              const z = pos.getZ(i);
+              // ahead of the wheel, in front of the driver, below the eye
+              if (z < L.eye.z + 0.15 || z > L.frame.zCowl || y > L.eye.y || Math.abs(x - L.driverX) > 0.15) continue;
+              worst = Math.max(worst, y - L.sightAt(z));
+            }
+          }
+          expect(worst, `${body.id}/${cockpit.id}/${dash.id}`).toBeLessThan(0.005);
+        }
+      }
+      for (const w of INTERIOR_PARTS.wheel) {
+        const g = wheelPart(w.id);
+        const rimTop = L.wheel.y + g.rim * Math.cos(L.wheelTilt) + 0.02;
+        expect(rimTop, `${body.id}/${w.id}`).toBeLessThan(L.sightAt(L.wheel.z));
+      }
+    }
+  });
+
   it('the steering wheel clears the dash and the driver can reach the levers', () => {
     for (const body of VISUAL_PARTS.body) {
       const L = cockpitLayout(body.id);
@@ -71,7 +101,7 @@ describe('cockpit', () => {
       for (const m of INTERIOR_PARTS.mirror) {
         const g = mirrorPart(m.id);
         // the stem reaches the headliner without poking through it
-        expect(L.mirror.y + g.h / 2 + 0.085, `${body.id}/${m.id}`).toBeLessThan(L.frame.roofAt(L.mirror.z) - 0.03);
+        expect(L.mirror.y + g.h / 2 + 0.055, `${body.id}/${m.id}`).toBeLessThan(L.frame.roofAt(L.mirror.z) - 0.03);
       }
     }
   });

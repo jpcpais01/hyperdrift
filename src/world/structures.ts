@@ -418,15 +418,11 @@ export class TrackStructures {
       }
     }
 
-    // --- jump gates: an amber portal at each takeoff and a glowing halo hanging in the air over the gap
+    // --- jump gates: an amber portal at each takeoff, a glowing halo hanging where the cars fly,
+    // and a row of amber studs where they come down
     {
-      for (let i = 0; i < n; i++) {
-        const a = track.samples[i];
-        const b = track.samples[(i + 1) % n];
-        if (a.gap || !b.gap) continue;
-        let j = i + 1;
-        while (track.samples[j % n].gap) j++;
-        const f = track.frameAt(i - 1);
+      const gate = (s: number) => {
+        const f = track.frameAt(s);
         const at = (lat: number, h: number) => f.pos.clone().addScaledVector(f.right, lat).addScaledVector(f.up, h);
         const L = OUTER + 0.9;
         for (const sd of [-1, 1]) {
@@ -435,24 +431,44 @@ export class TrackStructures {
         }
         P.add(box, 'dark', beamFramed(at(-L - 0.4, 8.2), at(L + 0.4, 8.2), 1.0, 1.2, f.fwd, m));
         P.add(box, 'amber', beamFramed(at(-L + 0.4, 7.62), at(L - 0.4, 7.62), 0.06, 1.0, f.fwd, m));
-        // halo midway, centred a few metres over the virtual deck (where the cars fly)
-        const mid = Math.round((i + j) / 2);
+      };
+      const halo = (s: number, h: number, radius = 11) => {
         const hm = new MeshBasicMaterial({ color: new Color(3.0, 1.4, 0.3), transparent: true, blending: AdditiveBlending, depthWrite: false });
         this.materials.push(hm);
-        const halo = new Mesh(new TorusGeometry(11, 0.35, 6, 64), hm);
-        const fm = track.frameAt(mid);
-        halo.position.copy(fm.pos).addScaledVector(fm.up, 6);
-        halo.quaternion.setFromRotationMatrix(new Matrix4().makeBasis(fm.right, fm.up, fm.fwd.clone().negate()));
-        this.halos.push(halo);
-        this.group.add(halo);
-        // landing lights: a row of amber studs across the landing edge
-        const lf = track.frameAt(j + 1);
+        const mesh = new Mesh(new TorusGeometry(radius, 0.35, 6, 64), hm);
+        const fm = track.frameAt(s);
+        mesh.position.copy(fm.pos).addScaledVector(fm.up, h);
+        mesh.quaternion.setFromRotationMatrix(new Matrix4().makeBasis(fm.right, fm.up, fm.fwd.clone().negate()));
+        this.halos.push(mesh);
+        this.group.add(mesh);
+      };
+      const studs = (s: number) => {
+        const lf = track.frameAt(s);
         for (let k = -4; k <= 4; k++) {
           const p = lf.pos.clone().addScaledVector(lf.right, k * 2).addScaledVector(lf.up, 0.03);
           m.makeBasis(lf.right, lf.up, lf.fwd.clone().negate()).scale(new Vector3(0.9, 0.05, 0.3)).setPosition(p);
           P.add(box, 'amber', m);
         }
+      };
+      for (let i = 0; i < n; i++) {
+        const a = track.samples[i];
+        const b = track.samples[(i + 1) % n];
+        if (a.gap || !b.gap) continue;
+        let j = i + 1;
+        while (track.samples[j % n].gap) j++;
+        gate(i - 1);
+        // midway, a few metres over the virtual deck (where the cars fly)
+        halo(Math.round((i + j) / 2), 6);
+        studs(j + 1);
         i = j;
+      }
+      // the sky dive: a gate on the crest, two halos down the flight and studs where most cars land
+      const dive = track.marks.dive;
+      if (dive) {
+        gate(dive.s0 - 24);
+        halo(dive.s0 + 15, 5.5, 12);
+        halo(dive.s0 + 60, 6.5, 12);
+        studs(dive.s0 + 110);
       }
     }
 

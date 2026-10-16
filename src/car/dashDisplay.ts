@@ -85,8 +85,11 @@ export class DashDisplay {
     g.beginPath();
     g.arc(cx, cy, r * 0.86, a0 + (sweep * red) / max, a0 + sweep);
     g.stroke();
-    for (let v = 0; v <= max + 1e-6; v += step / 5) {
-      const major = Math.abs(v / step - Math.round(v / step)) < 1e-6;
+    const ticks = Math.round((max * 5) / step);
+    for (let i = 0; i <= ticks; i++) {
+      // integer steps: no 7.000000001 labels
+      const v = (i * step) / 5;
+      const major = i % 5 === 0;
       const a = a0 + (sweep * v) / max;
       const r0 = r * (major ? 0.74 : 0.8);
       g.strokeStyle = v >= red ? '#ff4040' : '#e8ecef';
@@ -100,7 +103,7 @@ export class DashDisplay {
         g.font = `600 ${Math.round(r * 0.16)}px system-ui, sans-serif`;
         g.textAlign = 'center';
         g.textBaseline = 'middle';
-        g.fillText(fmt(v), cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
+        g.fillText(fmt(Math.round(v)), cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
       }
     }
     g.fillStyle = '#8a929c';
