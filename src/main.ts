@@ -5,11 +5,11 @@ import { audio } from './core/audio';
 import { installFirstTouch, isPortrait, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
 import { Renderer } from './core/renderer';
+import { CAMERA_ZOOM_LABELS, type CameraZoom } from './game/chaseCamera';
 import { Race, RaceWorld, type RaceMode } from './game/race';
 import { storage } from './storage';
 import { FpsCounter } from './ui/fps';
 import { Hud } from './ui/hud';
-import { PatchNotesScreen } from './ui/patchNotes';
 import { GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
@@ -54,8 +54,6 @@ class App {
     this.garage = new GarageScreen(ui);
     this.results = new ResultsScreen(ui);
     this.pause = new PauseScreen(ui);
-    const patchNotes = new PatchNotesScreen(ui);
-    this.menu.onPatchNotes = () => patchNotes.show(true);
     this.rotate = document.createElement('div');
     this.rotate.className = 'rotate-hint hidden';
     this.rotate.innerHTML = '<div><div class="phone"></div><p>Roda o telemóvel para jogar na horizontal</p></div>';
@@ -89,6 +87,15 @@ class App {
       this.setPaused(!this.race.paused);
     };
     this.input.onPause = togglePause;
+    const cycleCamera = () => {
+      if (this.state !== 'race' || !this.race || this.race.paused) return;
+      this.settings.camZoom = ((this.settings.camZoom + 1) % 3) as CameraZoom;
+      storage.saveSettings(this.settings);
+      this.race.setCameraZoom(this.settings.camZoom);
+      this.hud.setCameraZoom(this.settings.camZoom, `CÂMARA · ${CAMERA_ZOOM_LABELS[this.settings.camZoom]}`);
+    };
+    this.input.onCamera = cycleCamera;
+    this.hud.onCamera = cycleCamera;
     this.hud.onPause = togglePause;
     this.pause.onResume = () => this.setPaused(false);
     this.pause.onRestart = () => this.startRace(this.raceMode);
@@ -156,6 +163,8 @@ class App {
     this.renderer.setScene(this.world.scene);
     const ghost = mode === 'timetrial' ? storage.loadGhost() : null;
     const race = new Race(this.world, mode, this.build, this.input, this.hud, ghost);
+    race.setCameraZoom(this.settings.camZoom, true);
+    this.hud.setCameraZoom(this.settings.camZoom);
     race.onFinish = (r) => {
       const g = race.bestGhost;
       if (g) storage.saveGhost(g);

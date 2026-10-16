@@ -169,6 +169,35 @@ button {
   color: var(--muted);
 }
 
+.notes {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: calc(16px + var(--safe-t)) calc(16px + var(--safe-r)) calc(16px + var(--safe-b)) calc(16px + var(--safe-l));
+  background: rgba(5, 8, 20, 0.6);
+}
+.notes.hidden {
+  display: none;
+}
+.notes-list {
+  margin-bottom: 16px;
+}
+.notes-list h3 {
+  margin: 14px 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+.notes-list ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 /* ------------------------------------------------ garage */
 .garage-top {
   position: absolute;
@@ -432,7 +461,8 @@ button {
   font-style: italic;
   text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
 }
-.hud .hud-pause {
+.hud .hud-pause,
+.hud .hud-cam {
   pointer-events: auto;
 }
 .hud-tl {
@@ -498,6 +528,55 @@ button {
   border-radius: 12px;
   border: 1px solid var(--line);
   background: var(--panel);
+}
+.hud-cam {
+  position: absolute;
+  top: calc(60px + var(--safe-t));
+  right: calc(14px + var(--safe-r));
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  display: grid;
+  place-items: center;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.hud-cam svg {
+  width: 56%;
+  height: 56%;
+  margin-top: -6px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+.hud-cam-dots {
+  position: absolute;
+  bottom: 5px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+}
+.hud-cam-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.25;
+  transition: opacity 0.2s, transform 0.2s;
+}
+.hud-cam[data-zoom='0'] .hud-cam-dots i:nth-child(-n + 1),
+.hud-cam[data-zoom='1'] .hud-cam-dots i:nth-child(-n + 2),
+.hud-cam[data-zoom='2'] .hud-cam-dots i {
+  opacity: 1;
+  transform: scale(1.15);
+}
+.hud-cam:active {
+  transform: scale(0.94);
 }
 .hud-pause svg,
 .touch-controls svg {

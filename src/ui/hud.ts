@@ -52,6 +52,8 @@ export class Hud {
   private mapXf = { minx: 0, minz: 0, scale: 1 };
   private msgTimer = 0;
   onPause: (() => void) | null = null;
+  onCamera: (() => void) | null = null;
+  private camBtn: HTMLElement;
 
   constructor(root: HTMLElement) {
     this.el = document.createElement('div');
@@ -66,6 +68,7 @@ export class Hud {
         <div class="hud-best">MELHOR --:--.---</div>
       </div>
       <canvas class="hud-map" width="180" height="180"></canvas>
+      <button class="hud-cam" aria-label="Câmara (C)" title="Câmara (C)"><svg viewBox="0 0 24 24"><path d="M3 8.5h12v9H3zM15 11.5l6-3.5v10l-6-3.5"/></svg><span class="hud-cam-dots"><i></i><i></i><i></i></span></button>
       <button class="hud-pause" aria-label="Pausa"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
       <div class="hud-br">
         <div class="hud-speed"><span class="v">0</span><small>km/h</small></div>
@@ -93,6 +96,17 @@ export class Hud {
     this.wrong = q('.hud-wrong');
     this.map = q('.hud-map') as HTMLCanvasElement;
     q('.hud-pause').addEventListener('click', () => this.onPause?.());
+    this.camBtn = q('.hud-cam');
+    this.camBtn.addEventListener('click', () => {
+      this.onCamera?.();
+      this.camBtn.blur();
+    });
+  }
+
+  /** Lights one dot per zoom step: near = 1, medium = 2, far = 3. */
+  setCameraZoom(level: number, announce: string | null = null) {
+    this.camBtn.dataset.zoom = String(level);
+    if (announce) this.message(announce, 1.1);
   }
 
   show(v: boolean, mode: 'race' | 'timetrial' = 'race') {
