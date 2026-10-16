@@ -84,7 +84,7 @@ export class ChaseCamera {
     // the camera looks down its -z, the car faces +z
     E.set(this.look2.pitch, Math.PI + this.look2.yaw, this.look2.roll, 'YXZ');
     cam.quaternion.copy(QB).multiply(Q.setFromEuler(E));
-    cam.up.copy(car.up);
+    cam.up.copy(car.draw.up);
     const fov = 66 + Math.min(1.2, car.speed / car.stats.topSpeed) * 7 + car.boostFx * 9 + car.nitroFx * 3;
     cam.fov += (fov - cam.fov) * k(6);
     cam.updateProjectionMatrix();
@@ -100,6 +100,7 @@ export class ChaseCamera {
 
   update(cam: PerspectiveCamera, car: CarPhysics, dt: number, time: number) {
     const speed = car.speed;
+    const pose = car.draw;
     const top = car.stats.topSpeed;
     const boost = car.boostFx;
     // drift swings the camera to look into the slide
@@ -117,24 +118,24 @@ export class ChaseCamera {
     const scale = f.dist / ZOOMS[1].dist;
     const dist = f.dist + (Math.min(speed, 90) * 0.018 - boost * 0.7) * scale;
     const height = f.height + boost * 0.1 * scale;
-    const target = TMP.copy(car.pos)
-      .addScaledVector(car.fwd, -dist)
-      .addScaledVector(car.up, height)
-      .addScaledVector(car.right, this.side);
+    const target = TMP.copy(pose.pos)
+      .addScaledVector(pose.fwd, -dist)
+      .addScaledVector(pose.up, height)
+      .addScaledVector(pose.right, this.side);
     if (!this.initialised) {
       this.pos.copy(target);
-      this.up.copy(car.up);
-      this.look.copy(car.pos);
+      this.up.copy(pose.up);
+      this.look.copy(pose.pos);
       this.initialised = true;
     }
     const k = car.grounded ? 9 : 5;
     this.pos.lerp(target, 1 - Math.exp(-k * dt));
     // never let the camera fall behind too far at very high speed
     const max = dist * 1.6;
-    const off = TMP2.copy(this.pos).sub(car.pos);
-    if (off.length() > max) this.pos.copy(car.pos).addScaledVector(off.normalize(), max);
-    this.up.lerp(car.up, 1 - Math.exp(-(car.grounded ? 5 : 2) * dt)).normalize();
-    const lookTarget = TMP2.copy(car.pos).addScaledVector(car.up, f.look).addScaledVector(car.fwd, f.ahead + speed * 0.03);
+    const off = TMP2.copy(this.pos).sub(pose.pos);
+    if (off.length() > max) this.pos.copy(pose.pos).addScaledVector(off.normalize(), max);
+    this.up.lerp(pose.up, 1 - Math.exp(-(car.grounded ? 5 : 2) * dt)).normalize();
+    const lookTarget = TMP2.copy(pose.pos).addScaledVector(pose.up, f.look).addScaledVector(pose.fwd, f.ahead + speed * 0.03);
     this.look.lerp(lookTarget, 1 - Math.exp(-14 * dt));
 
     cam.position.copy(this.pos);

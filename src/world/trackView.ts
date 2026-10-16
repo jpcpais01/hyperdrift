@@ -497,7 +497,10 @@ export class TrackView {
         const smp = track.samples[i];
         m.makeBasis(smp.right, smp.up, smp.fwd);
         q.setFromRotationMatrix(m);
-        m.compose(smp.pos.clone().addScaledVector(smp.up, 4.5), q, new Vector3(1, 1, 1));
+        // centred on the corkscrew's heartline, wide enough to clear the deck edges
+        const axis = smp.axis || 4.5;
+        const r = Math.max(12.6, Math.hypot(axis, HALF_WIDTH) + 1.6) / 12.6;
+        m.compose(smp.pos.clone().addScaledVector(smp.up, axis), q, new Vector3(r, r, r));
         rings.setMatrixAt(k, m);
         rings.setColorAt(k, this.ringColors[k]);
       });

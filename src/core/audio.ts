@@ -471,6 +471,16 @@ export class AudioSystem {
   click() {
     this.tone(1400, 0.05, 'triangle', 0.08);
   }
+  /** soft tick as the menu focus moves */
+  nav() {
+    this.tone(2600, 0.028, 'sine', 0.035);
+  }
+  /** title screen → home: a rising chime */
+  start() {
+    this.tone(660, 0.18, 'sine', 0.09, 1.5);
+    this.tone(990, 0.32, 'sine', 0.06, 1.33);
+    this.burst(0.45, 900, 0.08);
+  }
   whoosh() {
     this.burst(0.5, 400, 0.18);
   }
