@@ -1,3 +1,4 @@
+import { PATCH_NOTES } from '../patchNotes';
 import {
   optionsFor,
   PAINTS,
@@ -46,7 +47,17 @@ export class MenuScreen {
       </div>
       <div class="menu-foot">
         <button class="btn-icon" data-a="sound" aria-label="Som">${muted ? 'SOM: DESLIGADO' : 'SOM: LIGADO'}</button>
-        <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · travar a curvar = drift</span>
+        <button class="btn-icon" data-a="notes">PATCH NOTES</button>
+        <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · travar a curvar = drift · C câmara</span>
+      </div>
+      <div class="notes hidden">
+        <div class="results-card">
+          <h2>Patch notes</h2>
+          <div class="notes-list">${PATCH_NOTES.map(
+            (g) => `<section><h3>${g.hour}</h3><ul>${g.entries.map((e) => `<li>${e}</li>`).join('')}</ul></section>`,
+          ).join('')}</div>
+          <button class="btn primary" data-a="notes-close">Fechar</button>
+        </div>
       </div>`;
     root.appendChild(this.el);
     this.el.addEventListener('click', (e) => {
@@ -57,6 +68,7 @@ export class MenuScreen {
       if (a === 'race') this.onRace?.();
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
+      if (a === 'notes' || a === 'notes-close') this.el.querySelector('.notes')!.classList.toggle('hidden', a === 'notes-close');
       if (a === 'sound' && this.onToggleSound) {
         const m = this.onToggleSound();
         b.textContent = m ? 'SOM: DESLIGADO' : 'SOM: LIGADO';
@@ -66,6 +78,7 @@ export class MenuScreen {
 
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
+    if (!v) this.el.querySelector('.notes')!.classList.add('hidden');
   }
 }
 

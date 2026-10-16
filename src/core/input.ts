@@ -23,6 +23,7 @@ export class Input {
   private steerSmooth = 0;
   readonly el: HTMLElement;
   onPause: (() => void) | null = null;
+  onCamera: (() => void) | null = null;
 
   constructor(root: HTMLElement) {
     window.addEventListener('keydown', (e) => {
@@ -32,6 +33,7 @@ export class Input {
         e.preventDefault();
       }
       if ((e.code === 'Escape' || e.code === 'KeyP') && this.onPause) this.onPause();
+      if (e.code === 'KeyC' && !e.repeat && !e.ctrlKey && !e.metaKey && this.onCamera) this.onCamera();
     });
     window.addEventListener('keyup', (e) => {
       const a = KEYS[e.code];
