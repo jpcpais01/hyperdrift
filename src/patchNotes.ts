@@ -8,7 +8,14 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 19:00 UTC',
     entries: [
+      "Car bodies redesigned from the ground up: each body now has its own silhouette, with fenders rising above a sunken hood, muscular rear haunches, a waist along the doors and a stance that sits lower and wider. The GT gets fender gills, the Hyper Cunha deep flank intakes and engine-cover louvres. Every lamp, grille, intake and vent is now moulded onto the curve of the body instead of sitting on top of it, with new LED, projector and hooked headlight designs, wrap-around and C-shaped tail lights, mesh intakes, chrome bezels, dark arch liners, bigger wheels and a smooth power-dome hood. Any mix of parts still fits.",
       "Cockpit view: press C (or the camera button) until you're in the driver's seat. Your gloved hands steer the wheel, reach for the gear lever on every shift and yank the handbrake when you start a drift, the gauges are live, the rear-view mirror really shows who's behind you, and sunlight falls in through the glass. Build the interior in the garage's new INTERIOR tab: cabin style (GT leather, stripped racer with a roll cage in your paint colour, or futuristic with light strips) and leather colour, dashboard, steering wheel, mirror, gear lever and handbrake, 3 of each, and the camera sits you inside to show each part working.",
+    ],
+  },
+  {
+    hour: '2026-10-16 18:00 UTC',
+    entries: [
+      'Phones and tablets now get the full PC graphics: real-time sun shadows, anti-aliasing, the detailed cloud layer and sharper resolution. New RESOLUÇÃO option on the menu (and in pause): AUTO keeps the frame rate smooth by adjusting sharpness on the fly, or lock it to 50%, 75% or 100%. Your choice is remembered.',
     ],
   },
   {

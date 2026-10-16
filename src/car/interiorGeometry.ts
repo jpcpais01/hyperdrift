@@ -656,7 +656,7 @@ export function dashPart(build: CarBuild, L: CockpitLayout): DashGeo {
   } else {
     // race: carbon pod with a display and a shift-light bar on top, switch panel in the middle
     const c = cl.clone();
-    screens.push(screenQuad(c.clone().addScaledVector(toEye, 0.006), 0.2, 0.1, toEye, UV_CLUSTER));
+    screens.push(screenQuad(c.clone().addScaledVector(toEye, 0.0085), 0.2, 0.1, toEye, UV_CLUSTER));
     b.carbon.push(screenFrame(c, 0.25, 0.13, toEye));
     for (let i = 0; i < 12; i++) {
       leds.push(c.clone().add(new Vector3(0.1 - (i * 0.2) / 11, 0.075, 0)).addScaledVector(toEye, 0.012));

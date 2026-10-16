@@ -1,5 +1,6 @@
 import {
   AdditiveBlending,
+  Vector3,
   Vector4,
   CanvasTexture,
   Color,
@@ -118,6 +119,8 @@ const FINISH = { solid: 0, carbon: 1, flip: 2, well: 3 };
 export interface PaintLayout {
   hoodStart: number;
   hoodEnd: number;
+  /** door shut lines (front, rear) and the fuel filler's z */
+  doors?: [number, number, number];
 }
 
 function hashBuild(b: CarBuild): number {
@@ -135,6 +138,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
     uVinyl: { value: 0 },
     uHood: { value: new Vector4(layout.hoodStart, layout.hoodEnd, 0.6, 0.6) },
     uNumber: { value: 7 },
+    uDoor: { value: new Vector3(...(layout.doors ?? [0.84, -0.64, -0.98])) },
   };
   // clearcoat on the material switches the clearcoat code path on; each zone then sets its own amount
   const paint = new MeshPhysicalMaterial({ clearcoat: 1, clearcoatRoughness: 0.06, roughness: 0.3, metalness: 0.5 });
@@ -148,7 +152,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nfloat paintClearcoat = 1.0;\npaintSurface(diffuseColor.rgb, metalnessFactor, roughnessFactor, paintClearcoat, normal, normalize(vViewPosition));')
       .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_CLEARCOAT\nmaterial.clearcoat *= paintClearcoat;\n#endif');
   };
-  paint.customProgramCacheKey = () => 'hyperdrift-paint-v2';
+  paint.customProgramCacheKey = () => 'hyperdrift-paint-v3';
 
   const rim = new MeshStandardMaterial({ color: 0xd5dae0, roughness: 0.22, metalness: 1 });
   const tail = new MeshBasicMaterial({ color: new Color(1.6, 0.05, 0.08) });

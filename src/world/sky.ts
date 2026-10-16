@@ -16,7 +16,6 @@ import {
   type Texture,
   type WebGLRenderer,
 } from 'three';
-import { detectLowEnd } from '../core/renderer';
 import { ATMOSPHERE_GLSL, CLOUD_Y, SUN_DIR, installAtmosphereFog } from './atmosphere';
 
 export { SUN_DIR } from './atmosphere';
@@ -123,8 +122,7 @@ export class Sky {
   private domeMat: ShaderMaterial;
   private cloudMat: ShaderMaterial;
   envMap: Texture | null = null;
-  readonly lowEnd = detectLowEnd();
-  /** Real-time sun shadows are only enabled on desktop-class hardware. */
+  /** Real-time sun shadows (on for every device once enableShadows runs). */
   shadows = false;
 
   constructor() {
@@ -143,7 +141,7 @@ export class Sky {
     this.cloudMat = new ShaderMaterial({
       vertexShader: cloudVert,
       fragmentShader: cloudFrag,
-      defines: { OCT: this.lowEnd ? 4 : 5 },
+      defines: { OCT: 5 },
       uniforms: {
         uTime: { value: 0 },
         uCam: { value: new Vector3() },
@@ -160,9 +158,8 @@ export class Sky {
     this.hemi = new HemisphereLight(0x8fa4ff, 0x6a5068, 0.22);
   }
 
-  /** Turns on a tight shadow map that follows the action (desktop only). */
+  /** Turns on a tight shadow map that follows the action. */
   enableShadows(gl: WebGLRenderer) {
-    if (this.lowEnd) return;
     this.shadows = true;
     gl.shadowMap.enabled = true;
     gl.shadowMap.type = PCFShadowMap;

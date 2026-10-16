@@ -14,7 +14,7 @@ import {
   type WebGLRenderer,
 } from 'three';
 import { Cockpit, IDLE_DRIVE, type CockpitDrive } from '../car/cockpit';
-import { detectLowEnd } from '../core/renderer';
+import { isTouch } from '../core/fullscreen';
 import { engineProfile } from '../audio/engineProfile';
 import { buildCar, type CarVisual } from '../car/carBuilder';
 import type { CarBuild, Slot } from '../car/parts';
@@ -68,7 +68,7 @@ export class GarageScene {
   private shotLook = new Vector3();
   private shotFresh = true;
   private demoT = 0;
-  private lowEnd = detectLowEnd();
+  private lowEnd = isTouch();
 
   constructor(private readonly sky: Sky) {
     sky.addTo(this.scene);

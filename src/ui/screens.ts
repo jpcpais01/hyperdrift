@@ -46,8 +46,10 @@ export class MenuScreen {
   onGarage: (() => void) | null = null;
   onToggleSound: (() => boolean) | null = null;
   onControls: (() => void) | null = null;
+  /** Cycles the render resolution and returns the new button label. */
+  onResolution: (() => string) | null = null;
 
-  constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null) {
+  constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null, resolutionLabel: string) {
     this.el = h('div', 'screen menu hidden');
     this.el.innerHTML = `
       <div class="menu-inner">
@@ -62,6 +64,7 @@ export class MenuScreen {
       <div class="menu-foot">
         <button class="btn-icon" data-a="sound" aria-label="Som">${muted ? 'SOM: DESLIGADO' : 'SOM: LIGADO'}</button>
         ${controlsLabel ? `<button class="btn-icon" data-a="controls">${controlsLabel}</button>` : ''}
+        <button class="btn-icon" data-a="res" aria-label="Resolução">${resolutionLabel}</button>
         <button class="btn-icon" data-a="notes">PATCH NOTES</button>
         <button class="btn-icon btn-update" data-a="update" aria-label="Atualizar o jogo"><span class="upd-ico" aria-hidden="true">↻</span><span class="upd-label">ATUALIZAR</span></button>
         <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · Espaço nitro · travar a curvar = drift · C câmara</span>
@@ -91,6 +94,7 @@ export class MenuScreen {
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
       if (a === 'controls') this.onControls?.();
+      if (a === 'res' && this.onResolution) b.textContent = this.onResolution();
       if (a === 'update') void checkAndReload();
       if (a === 'notes' || a === 'notes-close') this.el.querySelector('.notes')!.classList.toggle('hidden', a === 'notes-close');
       if (a === 'sound' && this.onToggleSound) {
@@ -103,6 +107,10 @@ export class MenuScreen {
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
     if (!v) this.el.querySelector('.notes')!.classList.add('hidden');
+  }
+
+  setResolutionLabel(label: string) {
+    this.el.querySelector('[data-a="res"]')!.textContent = label;
   }
 
   setControlsLabel(label: string) {
@@ -333,8 +341,9 @@ export class PauseScreen {
   onRestart: (() => void) | null = null;
   onQuit: (() => void) | null = null;
   onControls: (() => void) | null = null;
+  onResolution: (() => string) | null = null;
 
-  constructor(root: HTMLElement, withControls: boolean) {
+  constructor(root: HTMLElement, withControls: boolean, resolutionLabel: string) {
     this.el = h('div', 'screen pause hidden');
     this.el.innerHTML = `
       <div class="results-card">
@@ -343,6 +352,7 @@ export class PauseScreen {
           <button class="btn primary" data-a="resume">Continuar</button>
           <button class="btn" data-a="restart">Recomeçar</button>
           ${withControls ? '<button class="btn" data-a="controls">Controlos</button>' : ''}
+          <button class="btn" data-a="res">${resolutionLabel}</button>
           <button class="btn" data-a="quit">Sair para o menu</button>
         </div>
       </div>`;
@@ -355,11 +365,16 @@ export class PauseScreen {
       if (b.dataset.a === 'restart') this.onRestart?.();
       if (b.dataset.a === 'quit') this.onQuit?.();
       if (b.dataset.a === 'controls') this.onControls?.();
+      if (b.dataset.a === 'res' && this.onResolution) b.textContent = this.onResolution();
     });
   }
 
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
+  }
+
+  setResolutionLabel(label: string) {
+    this.el.querySelector('[data-a="res"]')!.textContent = label;
   }
 }
 

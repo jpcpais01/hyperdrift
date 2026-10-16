@@ -1,7 +1,7 @@
 import { Color, PerspectiveCamera, Scene, Vector3 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
 import { Cockpit } from '../car/cockpit';
-import { detectLowEnd } from '../core/renderer';
+import { isTouch } from '../core/fullscreen';
 import { paintById, randomBuild, type CarBuild } from '../car/parts';
 import { computeStats, type CarStats } from '../car/stats';
 import { engineProfile } from '../audio/engineProfile';
@@ -187,7 +187,7 @@ export class Race {
       world.scene.add(this.ghostVisual.root);
     }
     if (this.player) {
-      this.cockpit = new Cockpit(this.player.build, detectLowEnd(), world.sky.envMap);
+      this.cockpit = new Cockpit(this.player.build, isTouch(), world.sky.envMap);
       this.startAudio();
       hud?.setTrack(track);
       hud?.show(true, mode === 'timetrial' ? 'timetrial' : 'race');
