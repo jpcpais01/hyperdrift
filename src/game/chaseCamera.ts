@@ -20,6 +20,8 @@ export class ChaseCamera {
   private up = new Vector3(0, 1, 0);
   private look = new Vector3();
   private shake = 0;
+  /** nitro surge above steady (set by the race): punches the FOV in and out */
+  surge = 0;
   private side = 0;
   private initialised = false;
   private zoom: CameraZoom = 1;
@@ -188,7 +190,7 @@ export class ChaseCamera {
       cam.position.y += Math.sin(time * 83) * b;
     }
     cam.lookAt(LOOK);
-    const fov = f.fov + Math.min(1.2, speed / top) * 12 + boost * 14 + car.nitroFx * 5;
+    const fov = f.fov + Math.min(1.2, speed / top) * 12 + boost * 14 + car.nitroFx * 5 + this.surge * 4;
     cam.fov += (fov - cam.fov) * (1 - Math.exp(-6 * dt));
     cam.updateProjectionMatrix();
   }
