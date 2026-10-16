@@ -11,10 +11,12 @@
  * shadow so sunlight only falls in through the glass.
  */
 import {
+  Bone,
   BufferAttribute,
   CanvasTexture,
   Color,
   DirectionalLight,
+  DoubleSide,
   Group,
   HalfFloatType,
   HemisphereLight,
@@ -31,6 +33,8 @@ import {
   RepeatWrapping,
   Scene,
   ShaderChunk,
+  Skeleton,
+  SkinnedMesh,
   SphereGeometry,
   SRGBColorSpace,
   Vector3,
@@ -42,20 +46,16 @@ import {
 import { SUN_DIR } from '../world/atmosphere';
 import { mergeAll } from './carBuilder';
 import { DashDisplay, type DashStyle } from './dashDisplay';
+import { armGeometry, handFrame, handGeometry, mirrorMorphX, MORPH_KNOB, MORPH_OPEN, solveArm, UPPER } from './driverRig';
 import {
-  ball,
   cabinBase,
   cockpitLayout,
   dashPart,
   faceBasis,
-  gloveGeometry,
   handbrakePart,
   mirrorPart,
-  mirrorXGeo,
   shifterPart,
-  sleeve,
   wheelPart,
-  WRIST,
   type CockpitLayout,
   type IBucket,
   type IBuckets,
@@ -81,10 +81,9 @@ export interface CockpitDrive {
   latAccel: number;
   /** 0..1 handbrake held (countdown / parked) */
   parked: number;
+  /** the driver's head/upper body lean in car space (from the camera's g-force sway) */
+  lean?: { x: number; y: number; z: number };
 }
-
-const UPPER = 0.3;
-const FORE = 0.285;
 
 // ---------------------------------------------------------------- shading
 
@@ -141,18 +140,103 @@ const LIGHTS_PATCHED = ShaderChunk.lights_fragment_begin.replace(
   'getDirectionalLightInfo( directionalLight, directLight );\n\t\tdirectLight.color *= cabinSun( vCab );',
 );
 
-function cabinMaterial(u: ShadeUniforms, params: ConstructorParameters<typeof MeshStandardMaterial>[0]): MeshStandardMaterial {
+/**
+ * Fine surface detail without textures: a height field evaluated in cabin
+ * space (so it never stretches or seams across merged parts) bumps the normal
+ * and varies the roughness. It fades out before it can shimmer.
+ */
+export type Grain = 'leather' | 'fabric' | 'plastic' | 'perforated' | 'brushed' | 'suede';
+
+const GRAIN_KIND: Record<Grain, number> = { leather: 1, fabric: 2, plastic: 3, perforated: 4, brushed: 5, suede: 6 };
+
+const GRAIN_GLSL = /* glsl */ `
+float gHash(vec3 p) {
+  p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+float gNoise(vec3 x) {
+  vec3 i = floor(x);
+  vec3 f = fract(x);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(gHash(i), gHash(i + vec3(1, 0, 0)), f.x), mix(gHash(i + vec3(0, 1, 0)), gHash(i + vec3(1, 1, 0)), f.x), f.y),
+             mix(mix(gHash(i + vec3(0, 0, 1)), gHash(i + vec3(1, 0, 1)), f.x), mix(gHash(i + vec3(0, 1, 1)), gHash(i + vec3(1, 1, 1)), f.x), f.y), f.z);
+}
+float grainH(vec3 p, vec3 n) {
+#if GRAIN == 1
+  // pebbled leather: soft cells
+  float a = gNoise(p * 620.0);
+  float b = gNoise(p * 1400.0 + 7.0);
+  return a * a * 0.7 + b * 0.3;
+#elif GRAIN == 2
+  // woven fabric: a fine cross-hatch with noise
+  vec3 q = p * 900.0;
+  return 0.5 + 0.25 * sin(q.x + q.z) * sin(q.y - q.z) + 0.25 * gNoise(p * 2200.0);
+#elif GRAIN == 3
+  return gNoise(p * 1100.0);
+#elif GRAIN == 4
+  // perforations on a grid in whichever plane faces out
+  vec3 an = abs(n);
+  vec2 uv = an.x > an.y && an.x > an.z ? p.yz : an.y > an.z ? p.xz : p.xy;
+  vec2 c = fract(uv * 190.0) - 0.5;
+  return smoothstep(0.17, 0.27, length(c)) * 0.8 + 0.2 * gNoise(p * 900.0);
+#elif GRAIN == 5
+  // brushed metal, across the car
+  return gNoise(vec3(p.x * 40.0, p.y * 2600.0, p.z * 2600.0));
+#else
+  // suede: soft, fine and random
+  return gNoise(p * 1700.0) * 0.6 + gNoise(p * 520.0) * 0.4;
+#endif
+}
+`;
+
+function cabinMaterial(
+  u: ShadeUniforms,
+  params: ConstructorParameters<typeof MeshStandardMaterial>[0],
+  grain?: { kind: Grain; bump: number; rough?: number; tint?: number },
+): MeshStandardMaterial {
   const m = new MeshStandardMaterial({ ...params, vertexColors: true });
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>\n${SHADE_VERT_HEAD}`)
       .replace('#include <project_vertex>', '#include <project_vertex>\n\tvCab = (uCarInv * modelMatrix * vec4(transformed, 1.0)).xyz;');
-    sh.fragmentShader = sh.fragmentShader
+    let frag = sh.fragmentShader
       .replace('#include <common>', `#include <common>\n${SHADE_FRAG_HEAD}`)
       .replace('#include <lights_fragment_begin>', LIGHTS_PATCHED);
+    if (grain) {
+      frag = `#define GRAIN ${GRAIN_KIND[grain.kind]}\n` + frag;
+      frag = frag
+        .replace('#include <common>', `#include <common>\n${GRAIN_GLSL}`)
+        .replace(
+          '#include <roughnessmap_fragment>',
+          `#include <roughnessmap_fragment>
+  vec3 gN = normalize(cross(dFdx(vCab), dFdy(vCab)));
+  float gH = grainH(vCab, gN);
+  // fade the detail out before it gets smaller than a pixel
+  float gFade = 1.0 - smoothstep(0.0012, 0.004, length(fwidth(vCab)));
+  roughnessFactor = clamp(roughnessFactor * (1.0 + (gH - 0.5) * ${(grain.rough ?? 0.3).toFixed(3)} * gFade), 0.04, 1.0);
+  diffuseColor.rgb *= 1.0 + (gH - 0.5) * ${(grain.tint ?? 0.08).toFixed(3)} * gFade;`,
+        )
+        .replace(
+          '#include <normal_fragment_maps>',
+          `#include <normal_fragment_maps>
+  {
+    vec3 dpdx = dFdx(-vViewPosition);
+    vec3 dpdy = dFdy(-vViewPosition);
+    float dhx = dFdx(gH);
+    float dhy = dFdy(gH);
+    vec3 r1 = cross(dpdy, normal);
+    vec3 r2 = cross(normal, dpdx);
+    float det = dot(dpdx, r1);
+    vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+    normal = normalize(abs(det) * normal - ${grain.bump.toFixed(5)} * gFade * grad);
+  }`,
+        );
+    }
+    sh.fragmentShader = frag;
   };
-  m.customProgramCacheKey = () => 'cabin-sun';
+  m.customProgramCacheKey = () => 'cabin-sun-' + (grain ? `${grain.kind}-${grain.bump}-${grain.rough ?? 0.3}-${grain.tint ?? 0.08}` : 'plain');
   return m;
 }
 
@@ -188,11 +272,27 @@ const lum = (c: Color) => 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 // ---------------------------------------------------------------- the cockpit
 
 interface Arm {
-  upper: Mesh;
-  fore: Mesh;
-  elbow: Mesh;
+  upper: Bone;
+  lower: Bone;
   shoulder: Vector3;
   pole: Vector3;
+  /** last solved elbow (the hand turns to meet it) */
+  elbow: Vector3;
+  settled: boolean;
+}
+
+interface Hand {
+  group: Group;
+  meshes: Mesh[];
+  /** where the hand holds the rim, as a rotation round the wheel (wheel space) */
+  grip: number;
+  home: number;
+  /** re-gripping: moving from `from` to a new place on the rim */
+  move: number;
+  moveDur: number;
+  from: Matrix4;
+  open: number;
+  knob: number;
 }
 
 type HandTask = 'wheel' | 'shift' | 'brake';
@@ -216,8 +316,12 @@ export class Cockpit {
   private brake = new Group();
   private brakeLever = new Group();
   private brakeGeo: LeverGeo;
-  private hands: Group[] = [];
+  private hands: Hand[] = [];
   private arms: Arm[] = [];
+  private wrists: Vector3[] = [];
+  private shoulderOfs = new Vector3();
+  private wheelVel = 0;
+  private wheelStill = 0;
   private mirror = new Group();
   private mirrorRT: WebGLRenderTarget | null = null;
   private mirrorCam: PerspectiveCamera;
@@ -285,16 +389,31 @@ export class Cockpit {
     const leather = new Color(cabinColor(build.cabinColor));
     const u = this.uniforms;
     const shared = getSharedMaterials();
-    const mk = (p: ConstructorParameters<typeof MeshStandardMaterial>[0]) => this.own(cabinMaterial(u, p));
+    // fine surface grain costs a few noise lookups per pixel: skipped on low-end devices
+    const mk = (p: ConstructorParameters<typeof MeshStandardMaterial>[0], grain?: Parameters<typeof cabinMaterial>[2]) =>
+      this.own(cabinMaterial(u, p, lowEnd ? undefined : grain));
+    const style = build.cockpit;
+    // the headliner: warm grey suede in the GT, pale in the future cabin, bare painted shell in the racer
+    const headliner =
+      style === 'race' ? new Color(paint.color).multiplyScalar(0.55) : style === 'future' ? new Color(0x8a8d93) : new Color(0x66625e);
+    // tonal stitching on light leather, the car's colour on dark
+    const stitch = lum(leather) > 0.12 ? leather.clone().multiplyScalar(0.45) : accent.clone();
     this.bucketMat = {
-      dark: mk({ color: 0x1d1e22, roughness: 0.66, metalness: 0.05 }),
-      soft: mk({ color: 0x2a2b30, roughness: 0.82, metalness: 0 }),
-      leather: mk({ color: leather, roughness: 0.52, metalness: 0 }),
-      fabric: mk({ color: build.cockpit === 'future' ? 0x34363c : 0x25262a, roughness: 0.96, metalness: 0 }),
+      dark: mk({ color: 0x1d1e22, roughness: 0.62, metalness: 0.05 }, { kind: 'plastic', bump: 0.00012, rough: 0.25 }),
+      soft: mk({ color: 0x2a2b30, roughness: 0.8, metalness: 0 }, { kind: 'plastic', bump: 0.0002, rough: 0.2 }),
+      leather: mk({ color: leather, roughness: 0.5, metalness: 0 }, { kind: 'leather', bump: 0.00028, rough: 0.4, tint: 0.12 }),
+      perf: mk({ color: leather.clone().multiplyScalar(0.92), roughness: 0.6, metalness: 0 }, { kind: 'perforated', bump: 0.00022, rough: 0.3, tint: 0.35 }),
+      fabric: mk({ color: style === 'future' ? 0x34363c : 0x25262a, roughness: 0.96, metalness: 0 }, { kind: 'fabric', bump: 0.0002, rough: 0.1, tint: 0.15 }),
+      headliner: mk(
+        { color: headliner, roughness: style === 'race' ? 0.45 : 0.95, metalness: style === 'race' ? Math.min(0.5, paint.metalness) : 0 },
+        style === 'race' ? undefined : { kind: 'suede', bump: 0.0001, rough: 0.1, tint: 0.1 },
+      ),
+      grille: mk({ color: 0x141518, roughness: 0.55, metalness: 0.3 }, { kind: 'perforated', bump: 0.00025, rough: 0.2, tint: 0.6 }),
       carbon: mk({ color: 0x9aa0a8, map: shared.carbon.map, roughness: 0.26, metalness: 0.25 }),
-      metal: mk({ color: 0x8f959d, roughness: 0.34, metalness: 1 }),
+      metal: mk({ color: 0x8f959d, roughness: 0.32, metalness: 1 }, { kind: 'brushed', bump: 0.00004, rough: 0.6 }),
       chrome: mk({ color: 0xc9cdd3, roughness: 0.1, metalness: 1 }),
       accent: mk({ color: accent, roughness: 0.38, metalness: Math.min(0.6, paint.metalness) }),
+      stitch: mk({ color: stitch, roughness: 0.7, metalness: 0 }),
       wood: mk({ color: 0xffffff, map: woodTexture(), roughness: 0.28, metalness: 0 }),
       glow: this.own(new MeshBasicMaterial({ color: glow, vertexColors: true })),
       red: mk({ color: 0xc4111b, roughness: 0.38, metalness: 0.1 }),
@@ -368,7 +487,7 @@ export class Cockpit {
     const vfov = 2 * Math.atan(mg.h / 2 / L.eye.distanceTo(L.mirror)) * (180 / Math.PI) * 2.2;
     this.mirrorCam = new PerspectiveCamera(vfov, aspect, 0.6, 1600);
     this.mirrorCamNear = new PerspectiveCamera(vfov, aspect, 0.02, 4);
-    const camMat = new Matrix4().lookAt(L.mirror, L.mirror.clone().sub(r), new Vector3(0, 1, 0)).setPosition(L.mirror);
+    const camMat = new Matrix4().lookAt(L.mirror, L.mirror.clone().add(r), new Vector3(0, 1, 0)).setPosition(L.mirror);
     for (const c of [this.mirrorCam, this.mirrorCamNear]) {
       c.matrixAutoUpdate = false;
       c.matrix.copy(camMat);
@@ -376,35 +495,63 @@ export class Cockpit {
     }
     this.root.add(this.mirror);
 
-    // --- driver: gloved hands and sleeves
-    const gl = gloveGeometry();
-    const gloveMat = mk({ color: 0x17181b, roughness: 0.62, metalness: 0 });
+    // --- driver: gloved hands with posable fingers, and seamless suit sleeves
+    const hg = handGeometry();
+    this.wrists = hg.wrists;
+    const gloveMat = mk({ color: 0x34363c, roughness: 0.5, metalness: 0, side: DoubleSide });
+    const palmMat = mk({ color: 0x45474d, roughness: 0.95, metalness: 0 });
     // race suit: charcoal with a hint of the car's colour
-    const suitMat = mk({ color: new Color(0x23262c).lerp(accent, 0.3), roughness: 0.9, metalness: 0 });
-    const gGlove = this.withAO(mergeAll(gl.glove)!, null);
-    const gTrim = this.withAO(mergeAll(gl.trim)!, null);
+    const suitMat = mk({ color: new Color(0x23262c).lerp(accent, 0.28), roughness: 0.88, metalness: 0 });
+    const yoke = build.wheel === 'yoke';
     for (const side of [1, -1]) {
-      const hand = new Group();
-      hand.matrixAutoUpdate = false;
-      hand.add(this.mesh(side > 0 ? gGlove : this.withAO(mirrorXGeo(gGlove), null), gloveMat));
-      hand.add(this.mesh(side > 0 ? gTrim : this.withAO(mirrorXGeo(gTrim), null), this.bucketMat.accent));
-      this.root.add(hand);
-      this.hands.push(hand);
+      const group = new Group();
+      group.matrixAutoUpdate = false;
+      const meshes = (
+        [
+          [hg.glove, gloveMat],
+          [hg.trim, this.bucketMat.accent],
+          [hg.palm, palmMat],
+        ] as const
+      ).map(([g, m]) => {
+        const geo = this.withAO(side > 0 ? g.clone() : mirrorMorphX(g), null);
+        const mesh = this.mesh(geo, m);
+        group.add(mesh);
+        return mesh;
+      });
+      this.root.add(group);
+      // hands[0] is the right hand, on the car's right (-x); a quarter to three, or 9 and 3 on a yoke
+      const home = yoke ? 0 : side * 0.36;
+      this.hands.push({ group, meshes, grip: home, home, move: 1, moveDur: 0.2, from: new Matrix4(), open: 0, knob: 0 });
     }
-    const gUpper = this.withAO(sleeve(UPPER, 0.052, 0.046), null);
-    const gFore = this.withAO(sleeve(FORE, 0.045, 0.036), null);
-    const gElbow = this.withAO(ball(0.047, [0, 0, 0], 12, 10), null);
+    const ag = armGeometry();
+    const stripeMat = mk({ color: accent, roughness: 0.6, metalness: 0 });
+    this.root.updateMatrixWorld(true);
     for (const side of [1, -1]) {
-      const arm: Arm = {
-        upper: this.mesh(gUpper, suitMat),
-        fore: this.mesh(gFore, suitMat),
-        elbow: this.mesh(gElbow, suitMat),
-        // hands[0] is the right hand: shoulder on the car's right (-x)
+      const upper = new Bone();
+      const lower = new Bone();
+      upper.add(lower);
+      lower.position.set(0, UPPER, 0);
+      const suit = new SkinnedMesh(this.withAO(ag.suit.clone(), null), suitMat);
+      const stripe = new SkinnedMesh(this.withAO(ag.stripe.clone(), null), stripeMat);
+      for (const m of [suit, stripe]) {
+        m.frustumCulled = false;
+        this.geos.push(m.geometry);
+        this.root.add(m);
+      }
+      suit.add(upper);
+      suit.updateMatrixWorld(true);
+      const skel = new Skeleton([upper, lower]);
+      suit.bind(skel);
+      stripe.bind(skel, suit.bindMatrix);
+      this.arms.push({
+        upper,
+        lower,
         shoulder: side > 0 ? L.shoulderR.clone() : L.shoulderL.clone(),
-        pole: new Vector3(side > 0 ? -1 : 1, -1.1, -0.2).normalize(),
-      };
-      this.root.add(arm.upper, arm.fore, arm.elbow);
-      this.arms.push(arm);
+        // elbows out and down
+        pole: new Vector3(side > 0 ? -1 : 1, -1.2, -0.25).normalize(),
+        elbow: (side > 0 ? L.shoulderR : L.shoulderL).clone().add(new Vector3(-side * 0.1, -0.2, 0.15)),
+        settled: false,
+      });
     }
     this.update(0, IDLE_DRIVE);
   }
@@ -482,8 +629,13 @@ export class Cockpit {
 
     // --- steering wheel: the front wheels' angle times the steering ratio
     const target = Math.max(-2.3, Math.min(2.3, d.steer * 3.6));
+    const prevAngle = this.wheelAngle;
     this.wheelAngle += (target - this.wheelAngle) * (dt > 0 ? k(22) : 1);
-    this.wheelSpin.rotation.z = this.wheelAngle;
+    this.wheelVel = dt > 0 ? (this.wheelAngle - prevAngle) / dt : 0;
+    this.wheelStill = Math.abs(this.wheelVel) < 0.5 ? this.wheelStill + dt : 0;
+    // road texture comes up through the column at speed
+    const buzz = Math.min(1, Math.abs(d.speed) / 60) * 0.0035;
+    this.wheelSpin.rotation.z = this.wheelAngle + Math.sin(this.time * 57) * buzz + Math.sin(this.time * 31 + 1) * buzz * 0.6;
     this.wheelSpin.updateMatrix();
 
     // --- g-forces for the displays
@@ -499,20 +651,13 @@ export class Cockpit {
     if (d.gear !== this.lastGear && !reversing && dt > 0) {
       const up = d.gear > this.lastGear;
       this.lastGear = d.gear;
-      this.task = 'shift';
-      this.taskTime = 0;
+      this.startTask('shift', 0);
       this.shiftKick = up ? 1 : -1;
     }
     // lights out: the driver drops the handbrake
-    if (this.lastParked > 0.5 && d.parked < 0.5 && dt > 0) {
-      this.task = 'brake';
-      this.taskTime = 0.2;
-    }
+    if (this.lastParked > 0.5 && d.parked < 0.5 && dt > 0) this.startTask('brake', 0.2);
     this.lastParked = d.parked;
-    if (d.drifting && !this.wasDrifting && dt > 0) {
-      this.task = 'brake';
-      this.taskTime = 0;
-    }
+    if (d.drifting && !this.wasDrifting && dt > 0) this.startTask('brake', 0);
     this.wasDrifting = d.drifting;
     this.taskTime += dt;
     const hold = this.task === 'shift' ? 0.42 : this.task === 'brake' ? 0.55 : 0;
@@ -528,7 +673,9 @@ export class Cockpit {
     this.brakePull += (pull - this.brakePull) * (dt > 0 ? k(pull > this.brakePull ? 18 : 7) : 1);
     this.poseHandbrake();
 
-    // --- hands and arms
+    // --- hands and arms; the shoulders sway with the driver's body
+    if (d.lean) this.shoulderOfs.set(d.lean.x, d.lean.y, d.lean.z).multiplyScalar(0.85);
+    this.steerHands(dt);
     this.poseHands();
 
     // --- displays
@@ -595,50 +742,123 @@ export class Cockpit {
     else this.brakeLever.rotation.x = -p * 0.38;
   }
 
-  private gripMatrix(group: Object3D, lever: Object3D, geo: LeverGeo, out: Matrix4) {
+  /** A hand holding a lever's grip, turned to meet the right arm. */
+  private gripMatrix(group: Object3D, lever: Object3D, geo: LeverGeo, wrist: Vector3, out: Matrix4) {
     group.updateMatrix();
     lever.updateMatrix();
     const m = _m1.multiplyMatrices(group.matrix, lever.matrix);
-    const pos = _v1.copy(geo.grip).applyMatrix4(m);
-    const y = _v2.copy(geo.gripAxis).transformDirection(m);
-    const shoulder = this.arms[0].shoulder;
-    const z = _v3.copy(shoulder).sub(pos);
-    z.addScaledVector(y, -z.dot(y)).normalize();
-    const x = _v4.crossVectors(y, z);
-    return out.makeBasis(x, y, z).setPosition(pos);
+    const pos = _v5.copy(geo.grip).applyMatrix4(m);
+    const y = _v6.copy(geo.gripAxis).transformDirection(m);
+    return handFrame(pos, y, this.arms[0].elbow, wrist, false, out);
   }
 
-  private poseHands() {
-    const wheelM = _m2.multiplyMatrices(this.wheelPivot.matrix, this.wheelSpin.matrix);
+  private startTask(task: HandTask, time: number) {
+    this.task = task;
+    this.taskTime = time;
+    // the right hand leaves the rim; it comes back to its usual place
+    const h = this.hands[0];
+    h.move = 1;
+    h.grip = h.home - this.wheelAngle;
+  }
+
+  /**
+   * Shuffle steering: a hand that has been carried too far round the rim lets
+   * go and takes a fresh grip nearer its usual place, one hand at a time, so
+   * the arms never cross. Once the wheel settles, a hand left out of place
+   * goes back home.
+   */
+  private steerHands(dt: number) {
+    const yoke = this.build.wheel === 'yoke';
+    const rightBusy = this.task !== 'wheel' || this.handBlend > 0.05;
     for (let i = 0; i < 2; i++) {
-      const side = i === 0 ? 1 : -1;
-      const hand = this.hands[i];
-      const onWheel = _m3.multiplyMatrices(wheelM, _m4.makeTranslation(side * this.grip, 0, 0));
-      if (i === 0 && this.handBlend > 0.001) {
-        const target = this.task === 'brake' || (this.task === 'wheel' && this.brakePull > 0.5 && this.handBlend > 0.01)
-          ? this.gripMatrix(this.brake, this.brakeLever, this.brakeGeo, _m5)
-          : this.gripMatrix(this.shifter, this.shifterLever, this.shifterGeo, _m5);
-        blendMatrix(onWheel, target, this.handBlend, hand.matrix);
-      } else hand.matrix.copy(onWheel);
-      hand.matrixWorldNeedsUpdate = true;
-      // arm: two-bone IK from the shoulder to the glove's wrist
-      const wrist = _v1.set(side * WRIST.x, WRIST.y, WRIST.z).applyMatrix4(hand.matrix);
-      this.solveArm(this.arms[i], wrist);
+      const h = this.hands[i];
+      if (h.move < 1) {
+        h.move = Math.min(1, h.move + (dt > 0 ? dt / h.moveDur : 1));
+        continue;
+      }
+      if (yoke || dt === 0) continue;
+      const other = this.hands[1 - i];
+      if (other.move < 1 || rightBusy) continue;
+      const err = h.grip + this.wheelAngle - h.home;
+      const far = Math.abs(err) > 1.2;
+      const settle = Math.abs(err) > 0.3 && this.wheelStill > 0.35;
+      if (!far && !settle) continue;
+      // anticipate: keep turning the same way, so grab a little past home
+      const ahead = far ? -Math.sign(err) * 0.35 * Math.min(1, Math.abs(this.wheelVel) / 2) : 0;
+      this.handOnWheel(i, h.grip, h.from);
+      h.grip = h.home + ahead - this.wheelAngle;
+      h.move = 0;
+      h.moveDur = far ? 0.19 : 0.32;
     }
   }
 
-  private solveArm(arm: Arm, wrist: Vector3) {
-    const S = arm.shoulder;
-    const dir = _v2.copy(wrist).sub(S);
-    const d = Math.min(UPPER + FORE - 0.002, Math.max(0.05, dir.length()));
-    dir.normalize();
-    const cosA = (UPPER * UPPER + d * d - FORE * FORE) / (2 * UPPER * d);
-    const sinA = Math.sqrt(Math.max(0, 1 - cosA * cosA));
-    const perp = _v3.copy(arm.pole).addScaledVector(dir, -arm.pole.dot(dir)).normalize();
-    const elbow = _v4.copy(S).addScaledVector(dir, UPPER * cosA).addScaledVector(perp, UPPER * sinA);
-    place(arm.upper, S, elbow);
-    place(arm.fore, elbow, wrist);
-    arm.elbow.position.copy(elbow);
+  /** The hand's pose holding the rim at `grip` (wheel space angle), in car space. */
+  private handOnWheel(i: number, grip: number, out: Matrix4, wrist: Vector3 = this.wrists[0]): Matrix4 {
+    const side = i === 0 ? 1 : -1;
+    const wheelM = _m2.multiplyMatrices(this.wheelPivot.matrix, this.wheelSpin.matrix);
+    _m4.makeRotationZ(grip);
+    const pos = _v5.set(side * this.grip, 0, 0).applyMatrix4(_m4).applyMatrix4(wheelM);
+    const axis = _v6.set(0, 1, 0).transformDirection(_m4).transformDirection(wheelM);
+    return handFrame(pos, axis, this.arms[i].elbow, wrist, side < 0, out);
+  }
+
+  private poseHands() {
+    const knobShifter = this.build.shifter !== 'sequential';
+    const w = this.wrists;
+    for (let i = 0; i < 2; i++) {
+      const side = i === 0 ? 1 : -1;
+      const h = this.hands[i];
+      const arm = this.arms[i];
+      // finger pose first: the wrist moves with it
+      const lift = h.move < 1 ? Math.sin(h.move * Math.PI) : 0;
+      let open = lift * 0.95;
+      let knob = 0;
+      const toBrake = this.task === 'brake' || (this.task === 'wheel' && this.brakePull > 0.5 && this.handBlend > 0.01);
+      if (i === 0 && this.handBlend > 0.001) {
+        const b = this.handBlend;
+        open = Math.max(open, Math.sin(b * Math.PI) * 0.85);
+        if (toBrake && this.build.handbrake === 'button') open = Math.max(open, b * 0.75);
+        else if (!toBrake && knobShifter) knob = b * b;
+      }
+      h.open += (open - h.open) * 0.6;
+      h.knob = knob;
+      const wOpen = h.open * (1 - knob);
+      for (const mesh of h.meshes) {
+        const inf = mesh.morphTargetInfluences!;
+        inf[MORPH_OPEN] = wOpen;
+        inf[MORPH_KNOB] = knob;
+      }
+      const wrist = _v7.copy(w[0]).addScaledVector(_v3.copy(w[1]).sub(w[0]), wOpen).addScaledVector(_v3.copy(w[2]).sub(w[0]), knob);
+      const shoulder = _v8.copy(arm.shoulder).add(this.shoulderOfs);
+      // the hand turns round the grip to meet the forearm; two passes settle the elbow
+      for (let pass = 0; pass < 2; pass++) {
+        const m = h.group.matrix;
+        const onWheel = this.handOnWheel(i, h.grip, _m3, wrist);
+        if (h.move < 1) {
+          // lift off the rim towards the driver, fingers opening, then close on the new grip
+          const t = h.move * h.move * (3 - 2 * h.move);
+          blendMatrix(h.from, onWheel, t, m, 0);
+          _v1.set(0, 0, 1).transformDirection(this.wheelPivot.matrix).multiplyScalar(0.045 * lift);
+          m.elements[12] += _v1.x;
+          m.elements[13] += _v1.y;
+          m.elements[14] += _v1.z;
+        } else m.copy(onWheel);
+        if (i === 0 && this.handBlend > 0.001) {
+          const target = toBrake
+            ? this.gripMatrix(this.brake, this.brakeLever, this.brakeGeo, wrist, _m5)
+            : this.gripMatrix(this.shifter, this.shifterLever, this.shifterGeo, wrist, _m5);
+          blendMatrix(_m6.copy(m), target, this.handBlend, m, 0.05);
+        }
+        // arm: two-bone IK from the shoulder to the glove's wrist
+        const wp = _v1.set(side * wrist.x, wrist.y, wrist.z).applyMatrix4(m);
+        solveArm(arm.upper, arm.lower, shoulder, wp, arm.pole, arm.elbow);
+        if (!arm.settled) {
+          arm.settled = true;
+          pass--;
+        }
+      }
+      h.group.matrixWorldNeedsUpdate = true;
+    }
   }
 
   /** Renders the live rear view into the mirror (every other frame or so). */
@@ -697,29 +917,24 @@ const _m3 = new Matrix4();
 const _m4 = new Matrix4();
 const _m5 = new Matrix4();
 const _v1 = new Vector3();
-const _v2 = new Vector3();
 const _v3 = new Vector3();
-const _v4 = new Vector3();
+const _v5 = new Vector3();
+const _v6 = new Vector3();
+const _v7 = new Vector3();
+const _v8 = new Vector3();
+const _m6 = new Matrix4();
 const _pa = new Vector3();
 const _pb = new Vector3();
 const _qa = new Quaternion();
 const _qb = new Quaternion();
 const _s = new Vector3();
-const UP = new Vector3(0, 1, 0);
 
-function blendMatrix(a: Matrix4, b: Matrix4, t: number, out: Matrix4) {
+function blendMatrix(a: Matrix4, b: Matrix4, t: number, out: Matrix4, lift: number) {
   a.decompose(_pa, _qa, _s);
   b.decompose(_pb, _qb, _s);
   // arc the hand a little upwards on the way, so it doesn't clip through the console
-  const lift = Math.sin(t * Math.PI) * 0.05;
   _pa.lerp(_pb, t);
-  _pa.y += lift;
+  _pa.y += Math.sin(t * Math.PI) * lift;
   _qa.slerp(_qb, t);
   out.compose(_pa, _qa, _s.set(1, 1, 1));
-}
-
-function place(m: Mesh, a: Vector3, b: Vector3) {
-  const d = _pb.copy(b).sub(a);
-  m.position.copy(a);
-  m.quaternion.setFromUnitVectors(UP, d.normalize());
 }
