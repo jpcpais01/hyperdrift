@@ -8,6 +8,12 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 18:00 UTC',
     entries: [
+      'Phones and tablets now get the full PC graphics: real-time sun shadows, anti-aliasing, the detailed cloud layer and sharper resolution. New RESOLUÇÃO option on the menu (and in pause): AUTO keeps the frame rate smooth by adjusting sharpness on the fly, or lock it to 50%, 75% or 100%. Your choice is remembered.',
+    ],
+  },
+  {
+    hour: '2026-10-16 18:00 UTC',
+    entries: [
       'Garage camera: drag anywhere on your car to orbit all the way around it and look from above or down low, flick to let it glide, pinch (or use the mouse wheel / trackpad) to zoom in on the details, and double-tap to glide back. Leave it alone for a few seconds and the turntable starts spinning again.',
       'Fixed a big dark block that could cover most of the screen on PC when driving towards the sun. The sun now renders cleanly, and the bloom can no longer smear a single glitched pixel across the view.',
       'New ↻ ATUALIZAR button on the menu: tap it to check for the newest version of the game, install it and reload straight into it. Updates found in the background also no longer reload the game mid-race; they wait until you are back on the menu or in the garage.',
