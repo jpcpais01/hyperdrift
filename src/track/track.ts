@@ -26,6 +26,10 @@ export interface SegmentDef {
   boost?: boolean;
   pickups?: boolean;
   loop?: boolean;
+  /** suspension-bridge section: masts and cables carry the deck */
+  bridge?: boolean;
+  /** names this stretch so the scenery can build a set piece around it */
+  mark?: string;
 }
 
 export interface TrackSample {
@@ -37,6 +41,7 @@ export interface TrackSample {
   gap: boolean;
   tunnel: boolean;
   loop: boolean;
+  bridge: boolean;
 }
 
 export interface BoostPad {
@@ -75,6 +80,8 @@ export class Track {
   readonly length: number;
   readonly boostPads: BoostPad[] = [];
   readonly pickups: Pickup[] = [];
+  /** named stretches of the lap (start / end distance), from SegmentDef.mark */
+  readonly marks: Record<string, { s0: number; s1: number }> = {};
   /** world-space closure error that was spread over the lap (for tests) */
   readonly closureError: number;
   readonly closureVector: Vector3;
@@ -145,6 +152,7 @@ export class Track {
         gap: !!r.def.gap,
         tunnel: !!r.def.tunnel,
         loop: !!r.def.loop,
+        bridge: !!r.def.bridge,
       });
     }
 
@@ -158,6 +166,7 @@ export class Track {
           this.boostPads.push({ s: acc + ((k + 0.5) / count) * def.len, lateral: lat });
         }
       }
+      if (def.mark) this.marks[def.mark] = { s0: acc, s1: acc + def.len };
       if (def.pickups) {
         const rows = Math.max(1, Math.floor(def.len / 60));
         for (let k = 0; k < rows; k++) {
@@ -166,7 +175,7 @@ export class Track {
           }
         }
       }
-      acc += def.len;
+      acc += Math.max(1, Math.round(def.len));
     }
   }
 
@@ -279,3 +288,37 @@ function dirFrom(yaw: number, pitch: number): Vector3 {
 const tmpA = new Vector3();
 const tmpB = new Vector3();
 const scratchQuery = makeQuery();
+
+/**
+ * Closest approach between two parts of the lap that are far apart along the
+ * track (crossings, the helix stacking over itself, loops). `ratio` < 1 means
+ * two decks would touch: they need ~22 m side by side or ~11 m stacked.
+ */
+export function trackClearance(track: Track, minGap = 80) {
+  const n = track.samples.length;
+  let best = { dist: Infinity, ratio: Infinity, a: 0, b: 0 };
+  const d = new Vector3();
+  // a loop's entry and exit run side by side on purpose (its sideways shift keeps them apart)
+  const nearLoop = track.samples.map(() => false);
+  track.samples.forEach((smp, i) => {
+    if (smp.loop) for (let k = -100; k <= 100; k++) nearLoop[(i + k + n) % n] = true;
+  });
+  for (let i = 0; i < n; i += 2) {
+    const a = track.samples[i];
+    for (let j = i + minGap; j <= n - minGap + i && j < n; j += 2) {
+      const b = track.samples[j];
+      d.copy(b.pos).sub(a.pos);
+      const dist = d.length();
+      if (dist > 60) {
+        j += Math.floor((dist - 60) / 2) & ~1;
+        continue;
+      }
+      if (nearLoop[i] && nearLoop[j]) continue;
+      const dv = Math.abs(d.dot(a.up));
+      const dh = Math.sqrt(Math.max(0, dist * dist - dv * dv));
+      const ratio = Math.max(dh / 22, dv / 11);
+      if (ratio < best.ratio) best = { dist, ratio, a: i, b: j };
+    }
+  }
+  return best;
+}

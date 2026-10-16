@@ -18,9 +18,10 @@ export interface Settings {
 }
 
 const KEY_BUILD = 'hyperdrift.build.v1';
-const KEY_GHOST = 'hyperdrift.ghost.v1';
+// v2: the lap was redesigned (ghosts and lap records from the old layout no longer apply)
+const KEY_GHOST = 'hyperdrift.ghost.v2';
 const KEY_SETTINGS = 'hyperdrift.settings.v1';
-const KEY_RECORDS = 'hyperdrift.records.v1';
+const KEY_RECORDS = 'hyperdrift.records.v2';
 const KEY_CALLSIGN = 'hyperdrift.callsign.v1';
 
 function get<T>(key: string): T | null {

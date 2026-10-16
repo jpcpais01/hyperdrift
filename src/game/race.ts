@@ -153,6 +153,7 @@ export class Race {
   private ghostBest: GhostLap | null;
   private newRecord = false;
   private attractCam = 0;
+  private shotCam: number[] | null = null;
   private attractTarget = 0;
   private acc = 0;
   private done = false;
@@ -204,6 +205,9 @@ export class Race {
     const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
     const startOffset = Number(params.get('start') ?? 0) || 0;
     const autopilot = params.has('autopilot');
+    // ?shot=s,lateral,height,lookAhead,lookLateral: a fixed camera for screenshots of the scenery
+    const shot = params.get('shot')?.split(',').map(Number);
+    if (shot && shot.length >= 3) this.shotCam = shot;
 
     // player starts at the back of the grid, like a proper underdog
     grid.forEach((g, i) => {
@@ -486,6 +490,13 @@ export class Race {
     if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
     else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
+    if (this.shotCam) {
+      const [s, lat, h, ahead = 40, latAhead = 0, hAhead = 0] = this.shotCam;
+      const tr = this.world.track;
+      tr.pointAt(s, lat, h, camera.position);
+      camera.up.copy(tr.frameAt(s).up);
+      camera.lookAt(tr.pointAt(s + ahead, latAhead, hAhead, TMP));
+    }
     renderer.setOverlay(cockpit ? cockpit.scene : null);
     this.world.decor.update(dt, camera.position);
     // shadows follow the player (or whatever the attract camera is looking at)

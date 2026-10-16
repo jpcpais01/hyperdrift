@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Track } from '../src/track/track';
+import { Track, trackClearance } from '../src/track/track';
 import { SKYWAY } from '../src/track/skyway';
 import { CarPhysics } from '../src/game/carPhysics';
 import { AiDriver } from '../src/game/ai';
@@ -8,7 +8,7 @@ import { DEFAULT_BUILD, randomBuild } from '../src/car/parts';
 
 const track = new Track(SKYWAY);
 
-function simulate(build = DEFAULT_BUILD, seconds = 140, skill = 0.97) {
+function simulate(build = DEFAULT_BUILD, seconds = (track.length / 3675) * 140, skill = 0.97) {
   const car = new CarPhysics(track, computeStats(build));
   car.reset(track.length - 12, 0);
   const ai = new AiDriver(track, skill, 1);
@@ -39,6 +39,12 @@ describe('track', () => {
     expect(track.closureError).toBeLessThan(40);
     expect(track.length).toBeGreaterThan(3000);
   });
+  it('never runs into itself (helix, crossings)', () => {
+    expect(trackClearance(track).ratio).toBeGreaterThan(1);
+  });
+  it('names the set pieces the scenery is built around', () => {
+    for (const m of ['start', 'bridge', 'hairpin', 'helix', 'tunnel', 'loop']) expect(track.marks[m]).toBeDefined();
+  });
   it('projects positions back onto the track', () => {
     for (const s of [10, 900, 1500, 2600]) {
       const p = track.pointAt(s, 3, 1);
@@ -60,7 +66,7 @@ describe('physics', () => {
   });
   it('works for several random part combinations', () => {
     for (const seed of [1, 2, 3]) {
-      const r = simulate(randomBuild(seed), 60, 0.93);
+      const r = simulate(randomBuild(seed), (track.length / 3675) * 60, 0.93);
       console.log(seed, r);
       expect(r.respawns).toBe(0);
       expect(r.laps).toBeGreaterThan(0.8);
