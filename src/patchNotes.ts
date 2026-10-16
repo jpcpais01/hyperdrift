@@ -6,9 +6,19 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
-    hour: '2026-10-16 19:00 UTC',
+    hour: '2026-10-16 20:00 UTC',
     entries: [
       "New ZONA LIVRE: Jardim Celeste, a floating garden island made for drifting, with no laps and no clock. A wide stone plaza with a gymkhana course painted on it, a meadow loop with jumps and light gates, a banked rim road, waterfalls spilling off the edges, a chrome ring to drive through and cherry blossom everywhere. Chain drifts to build a combo (up to ×5), bank it before it runs out and chase your best score. Four resident drivers cruise and drift around the island, and online the host can open the zone for the whole room: friends drop in and out whenever they like, see each other's live combos over their cars and share a scoreboard.",
+      "Cockpit view, round two: the dashboard, gauges and steering wheel now sit below the windscreen line, so the road ahead is always in full view, and the camera sits a touch lower with a wider field of view. The rear-view mirror now really shows what's behind you, flipped like a real mirror.",
+      "All-new driver hands and arms: fully articulated gloves with knuckles, a thumb that wraps the rim and stitched cuffs, on smooth sleeves that bend at the elbow. Hands shuffle along the rim on tight turns, follow your head as you lean, and reach naturally for the gear lever and handbrake.",
+      "Interiors rebuilt in detail: grained leather, perforated seat inserts with contrast stitching, suede headliner, brushed metal trim, stitched door cards with armrests, speakers and map pockets, padded sun visors, an overhead console, a starter button and drive-mode dial, and in the racer a window net, fire pull and riveted carbon. Gauge dials now show clean numbers.",
+      'The garage has been rebuilt to be much clearer. Pick a section (Exterior, Interior or Desempenho), then a category from a list that shows what is fitted on each part, with an icon and a line on what it changes. Opening a category lists its parts with a description, an EQUIPADO tag on the one you have, and for performance parts the exact stat changes (for example ▲ Aderência +2.8) before you even try them. Paints are a grid of colour chips, the camera swings to whatever category you highlight, and a new class rating (D to S, with a score) sums up your car and shows how much each part would raise or lower it.',
+    ],
+  },
+  {
+    hour: '2026-10-16 19:00 UTC',
+    entries: [
+      'Nitro and boost glow on the road now fades out softly instead of ending in a hard line, and the jets thin out gently where they meet the road.',
       'Brand-new menus with a console feel. The game opens on a title screen, then the home shows your modes as big tiles over the live race: the selected one grows, glows and fills the screen with its name, details, your best lap and a big play button. Settings (sound, controls, resolution, updates, keyboard map) and patch notes now slide in as side panels, pause is a sleek side menu, and the results board counts in driver by driver with a gold finish for wins. Plug in a gamepad or use the arrows: every menu can be driven with the d-pad, A/✕ to pick, B/○ to go back and LB/RB (Q/E) to flip garage tabs, with button hints on screen.',
     ],
   },

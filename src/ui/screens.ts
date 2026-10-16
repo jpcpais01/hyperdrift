@@ -406,17 +406,96 @@ const STAT_LABELS: [keyof DisplayStats, string][] = [
   ['boost', 'Boost'],
 ];
 
+const TABS: { id: GarageTab; label: string; intro: string }[] = [
+  { id: 'visual', label: 'Exterior', intro: 'O aspeto do carro. Todas as peças encaixam umas nas outras.' },
+  { id: 'interior', label: 'Interior', intro: 'O que vês ao volante, na vista de cockpit.' },
+  { id: 'tech', label: 'Desempenho', intro: 'Como o carro anda. Cada peça muda as barras em baixo.' },
+];
+
+/** a one-liner under each category, so it's clear what it changes */
+const SLOT_HINTS: Partial<Record<Slot, string>> = {
+  body: 'Silhueta e cabine',
+  front: 'Nariz e para-choques',
+  rear: 'Traseira e luzes',
+  hood: 'Capô',
+  skirts: 'Embaladeiras',
+  spoiler: 'Asa traseira',
+  rims: 'Modelo e cor',
+  headlights: 'Faróis da frente',
+  exhaust: 'Saídas de escape',
+  paint: 'Cor por zona do carro',
+  vinyl: 'Padrão e cor',
+  engine: 'Velocidade e aceleração',
+  turbo: 'Força em baixa ou alta',
+  nitro: 'Força e duração do boost',
+  tires: 'Aderência e drift',
+  suspension: 'Curvas, saltos e aterragens',
+  weight: 'Agilidade e estabilidade',
+  cockpit: 'Estilo e cor do habitáculo',
+  dash: 'Mostradores',
+  wheel: 'Volante',
+  mirror: 'Retrovisor',
+  shifter: 'Alavanca das mudanças',
+  handbrake: 'Travão de mão',
+};
+
+const g = (d: string) => `<svg viewBox="0 0 24 24">${d}</svg>`;
+const SLOT_ICONS: Partial<Record<Slot, string>> = {
+  body: g('<path d="M2 15v-2.5l3-1 3.5-4h7l3.5 4 3 1V15z"/><circle cx="7" cy="16" r="2"/><circle cx="17" cy="16" r="2"/>'),
+  front: g('<path d="M3 16v-4l3-3h12l3 3v4z"/><path d="M6 13h3M15 13h3M9 16h6"/>'),
+  rear: g('<path d="M3 16V9h18v7z"/><path d="M5 12h4M15 12h4M10 16v2M14 16v2"/>'),
+  hood: g('<path d="M4 18 7 6h10l3 12z"/><path d="M12 6v12M9 12h6"/>'),
+  skirts: g('<path d="M2 14h20M4 17h16"/><circle cx="6" cy="11" r="2"/><circle cx="18" cy="11" r="2"/>'),
+  spoiler: g('<path d="M3 8h18M6 8v5M18 8v5M4 16h16"/>'),
+  rims: g('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v6.5M12 14.5V21M3.5 9.5l6 1.8M14.5 12.7l6 1.8M3.5 14.5l6-1.8M14.5 11.3l6-1.8"/>'),
+  headlights: g('<path d="M9 7a5 5 0 0 0 0 10z"/><path d="M13 8h8M13 12h8M13 16h8"/>'),
+  exhaust: g('<circle cx="8" cy="14" r="4"/><circle cx="8" cy="14" r="1.5"/><path d="M14 11c2-2 4 0 6-2M14 15c2-1 4 1 6 0"/>'),
+  paint: g('<path d="M4 20c4 0 4-3 4-5l9-9a2 2 0 0 1 3 3l-9 9c-2 0-5 0-5 4z"/>'),
+  vinyl: g('<path d="M3 17 9 7h4l-6 10zM11 17l6-10h4l-6 10z"/>'),
+  vinylColor: g('<circle cx="12" cy="12" r="8"/>'),
+  engine: g('<path d="M4 9h3l1-2h6l1 2h3l2 3v4l-2 2H7l-3-3z"/><path d="M10 11v4M13 11v4"/>'),
+  turbo: g('<circle cx="12" cy="12" r="8"/><path d="M12 4c-2 4 0 8 0 8s4-2 8 0M12 20c2-4 0-8 0-8s-4 2-8 0"/>'),
+  nitro: g('<path d="M9 3h6M10 3v3h4V3M8 8h8v12H8z"/><path d="M13 10l-3 4h3l-2 4"/>'),
+  tires: g('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2 2M16.4 16.4l2 2M5.6 18.4l2-2M16.4 7.6l2-2"/>'),
+  suspension: g('<path d="M12 2v3M12 19v3M8 5h8M8 19h8M9 7l6 2-6 2 6 2-6 2 6 2"/>'),
+  weight: g('<path d="M7 9h10l3 11H4z"/><circle cx="12" cy="6" r="2.5"/>'),
+  cockpit: g('<path d="M6 20v-6a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v6M8 11V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v6"/>'),
+  dash: g('<path d="M4 16a8 8 0 0 1 16 0"/><path d="M12 16l4-5"/><circle cx="12" cy="16" r="1.5"/>'),
+  wheel: g('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M3.5 10.5Q12 8 20.5 10.5M12 14.5V21"/>'),
+  mirror: g('<rect x="3" y="7" width="18" height="8" rx="3"/><path d="M12 7V4"/>'),
+  shifter: g('<circle cx="12" cy="5" r="2.5"/><path d="M12 7.5V17M8 21h8l-1-4H9z"/>'),
+  handbrake: g('<path d="M5 19 17 7"/><rect x="14" y="3.5" width="7" height="5" rx="2.5" transform="rotate(45 17.5 6)"/><path d="M3 21h6"/>'),
+};
+
+/** One number to sum the car up, with a class letter, like a racing game's PI. */
+function rating(s: DisplayStats) {
+  const v = (s.speed * 1.2 + s.accel + s.grip + s.boost * 0.8) / 4;
+  const pi = Math.round(100 + v * 80);
+  const cls = pi >= 640 ? 'S' : pi >= 580 ? 'A' : pi >= 520 ? 'B' : pi >= 460 ? 'C' : 'D';
+  return { pi, cls };
+}
+
+/**
+ * Console-style garage: pick a section (Exterior / Interior / Desempenho), then
+ * a category from a list that shows what's fitted, then a part. Each part
+ * card says what it does, and performance parts show their stat changes up
+ * front. The 3D camera follows whatever category is highlighted.
+ */
 export class GarageScreen {
   readonly el: HTMLElement;
   private tab: GarageTab = 'visual';
   private slot: Slot = 'body';
   /** the chosen sub-entry when the slot has a row of them (paint zones, vinyl/rim colour) */
   private sub: Slot = 'body';
+  private view: 'cats' | 'opts' = 'cats';
   private build!: CarBuild;
-  private slotsEl: HTMLElement;
+  private panel: HTMLElement;
+  private catsEl: HTMLElement;
   private subEl: HTMLElement;
   private optsEl: HTMLElement;
   private statsEl: HTMLElement;
+  private menuBtn: HTMLElement;
+  private backBtn: HTMLElement;
   onChange: ((b: CarBuild, slot: Slot) => void) | null = null;
   /** the camera follows what's being edited: the interior tab sits you in the driver's seat */
   onView: ((interior: boolean, slot: Slot) => void) | null = null;
@@ -431,29 +510,38 @@ export class GarageScreen {
         <h2><small>Hyperdrift</small>Garagem</h2>
         <button class="pill primary" data-a="race">Correr<span class="pill-arrow">›</span></button>
       </header>
-      <aside class="garage-panel">
+      <aside class="garage-panel" data-view="cats">
         <div class="tabs">
           <i class="glyph g-l1" aria-hidden="true"></i>
-          <button data-tab="visual" class="on">Visual</button>
-          <button data-tab="interior">Interior</button>
-          <button data-tab="tech">Técnico</button>
+          ${TABS.map((t) => `<button data-tab="${t.id}"${t.id === 'visual' ? ' class="on"' : ''}>${t.label}</button>`).join('')}
           <i class="glyph g-r1" aria-hidden="true"></i>
-          
         </div>
-        <div class="slots"></div>
-        <div class="slots subslots"></div>
-        <div class="options"></div>
-        <div class="stats"></div>
+        <div class="gp-body">
+          <div class="gp-cats">
+            <p class="gp-intro"></p>
+            <div class="cat-list"></div>
+          </div>
+          <div class="gp-opts">
+            <button class="opts-back" data-a="cats"><span class="ob-arrow">‹</span><span class="ob-ico"></span><span class="ob-txt"><b></b><small></small></span></button>
+            <div class="slots subslots"></div>
+            <div class="options"></div>
+          </div>
+        </div>
+        <div class="gp-stats"></div>
+        <footer class="gp-hints"></footer>
       </aside>
       <div class="garage-hint"><span class="orbit-ico" aria-hidden="true"></span>${
         isTouch() ? 'Arrasta para orbitar · Pinça para zoom · Toque duplo repõe' : 'Arrasta para orbitar · Roda para zoom · Duplo clique repõe'
       }</div>`;
     root.appendChild(this.el);
-    this.slotsEl = this.el.querySelector('.slots')!;
+    this.panel = this.el.querySelector('.garage-panel')!;
+    this.catsEl = this.el.querySelector('.cat-list')!;
     this.subEl = this.el.querySelector('.subslots')!;
     this.optsEl = this.el.querySelector('.options')!;
-    this.statsEl = this.el.querySelector('.stats')!;
-    this.el.querySelector('[data-a="back"]')!.addEventListener('click', () => {
+    this.statsEl = this.el.querySelector('.gp-stats')!;
+    this.menuBtn = this.el.querySelector('[data-a="back"]')!;
+    this.backBtn = this.el.querySelector('.opts-back')!;
+    this.menuBtn.addEventListener('click', () => {
       audio.click();
       this.onBack?.();
     });
@@ -461,21 +549,30 @@ export class GarageScreen {
       audio.click();
       this.onRace?.();
     });
+    this.backBtn.addEventListener('click', () => {
+      audio.click();
+      this.setView('cats');
+    });
     this.el.querySelectorAll<HTMLElement>('[data-tab]').forEach((b) =>
       b.addEventListener('click', () => {
         audio.click();
         this.setTab(b.dataset.tab as GarageTab);
       }),
     );
-    // L1 / R1 (or Q / E) flip through the tabs
+    // L1 / R1 (or Q / E) flip through the sections
     this.el.addEventListener('nav-tab', (e) => {
-      const tabs = [...this.el.querySelectorAll<HTMLElement>('[data-tab]')].map((b) => b.dataset.tab as GarageTab);
-      const i = tabs.indexOf(this.tab);
-      const next = tabs[(i + (e as CustomEvent<number>).detail + tabs.length) % tabs.length];
+      const i = TABS.findIndex((t) => t.id === this.tab);
       audio.nav();
-      this.setTab(next);
+      this.setTab(TABS[(i + (e as CustomEvent<number>).detail + TABS.length) % TABS.length].id);
       nav.refocus();
     });
+    // the camera swings to whichever category is highlighted
+    const peek = (e: Event) => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>('.cat');
+      if (row && this.view === 'cats') this.onView?.(this.tab === 'interior', row.dataset.slot as Slot);
+    };
+    this.catsEl.addEventListener('focusin', peek);
+    this.catsEl.addEventListener('pointerover', (e) => (e as PointerEvent).pointerType === 'mouse' && peek(e));
     // pad and keyboard users preview a part's stats just by landing on it
     this.optsEl.addEventListener('focusin', (e) => {
       const card = (e.target as HTMLElement).closest<HTMLElement>('.opt');
@@ -484,42 +581,99 @@ export class GarageScreen {
     this.optsEl.addEventListener('focusout', () => this.renderStats());
   }
 
-  private setTab(tab: GarageTab) {
-    this.tab = tab;
-    this.slot = (tab === 'visual' ? VISUAL_SLOTS : tab === 'interior' ? INTERIOR_SLOTS : TECH_SLOTS)[0].slot;
-    this.sub = this.slot;
-    const btns = [...this.el.querySelectorAll<HTMLElement>('[data-tab]')];
-    btns.forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
-    this.render();
-  }
-
   show(v: boolean, build?: CarBuild) {
     if (build) this.build = { ...build };
     this.el.classList.toggle('hidden', !v);
-    if (v) this.render();
+    if (v) {
+      this.setView('cats', false);
+      requestAnimationFrame(() => nav.refocus());
+    }
+  }
+
+  private slots(): { slot: Slot; label: string }[] {
+    return this.tab === 'visual' ? VISUAL_SLOTS : this.tab === 'interior' ? INTERIOR_SLOTS : TECH_SLOTS;
+  }
+
+  private setTab(tab: GarageTab) {
+    this.tab = tab;
+    this.slot = this.slots()[0].slot;
+    this.sub = this.slot;
+    this.el.querySelectorAll<HTMLElement>('[data-tab]').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab));
+    this.setView('cats');
+  }
+
+  private setView(v: 'cats' | 'opts', anim = true) {
+    this.view = v;
+    this.panel.dataset.view = v;
+    // Esc / ◯ steps back out of a category before leaving the garage
+    this.menuBtn.toggleAttribute('data-back', v === 'cats');
+    this.backBtn.toggleAttribute('data-back', v === 'opts');
+    const body = this.el.querySelector<HTMLElement>('.gp-body')!;
+    if (anim) {
+      body.classList.remove('slide-in', 'slide-out');
+      void body.offsetWidth;
+      body.classList.add(v === 'opts' ? 'slide-in' : 'slide-out');
+    }
+    this.el.querySelector<HTMLElement>('.gp-hints')!.innerHTML =
+      v === 'cats' ? `${hint('ok', 'Abrir')}${hint('tabs', 'Secção')}${hint('back', 'Menu')}` : `${hint('ok', 'Equipar')}${hint('back', 'Voltar')}`;
+    this.render();
+    requestAnimationFrame(() => nav.refocus());
   }
 
   private render() {
-    // re-rendering replaces the buttons: remember which one had the focus
-    const had = document.activeElement as HTMLElement | null;
-    const keep = had && this.el.contains(had) ? (had.dataset.id ? `.opt[data-id="${had.dataset.id}"]` : had.closest('.subslots') ? '.subslots .on' : had.closest('.slots') ? '.slots:not(.subslots) .on' : null) : null;
-    this.renderInner();
-    if (keep) this.el.querySelector<HTMLElement>(keep)?.focus({ preventScroll: true });
+    if (this.view === 'cats') this.renderCats();
+    else this.renderOpts();
+    this.renderStats();
   }
 
-  private renderInner() {
-    const slots: { slot: Slot; label: string }[] = this.tab === 'visual' ? VISUAL_SLOTS : this.tab === 'interior' ? INTERIOR_SLOTS : TECH_SLOTS;
-    this.slotsEl.innerHTML = '';
-    for (const s of slots) {
-      const b = h('button', s.slot === this.slot ? 'on' : '', esc(s.label));
+  /** what's fitted in a slot, as text plus an optional colour dot */
+  private fitted(slot: Slot) {
+    const subs = SUB_SLOTS[slot as keyof typeof SUB_SLOTS] ?? INTERIOR_SUB_SLOTS[slot as keyof typeof INTERIOR_SUB_SLOTS];
+    const main = optionsFor(slot).find((o) => o.id === this.build[slot]);
+    const dots = (subs ?? [{ slot }]).map((s) => this.swatchOf(s.slot, this.build[s.slot])).filter((x): x is string => !!x);
+    const uniq = [...new Set(dots)].slice(0, 4);
+    return { name: main?.name ?? '', dots: uniq };
+  }
+
+  private renderCats() {
+    const t = TABS.find((x) => x.id === this.tab)!;
+    this.el.querySelector('.gp-intro')!.textContent = t.intro;
+    const had = (document.activeElement as HTMLElement | null)?.dataset?.slot;
+    this.catsEl.innerHTML = '';
+    this.slots().forEach((s, i) => {
+      const f = this.fitted(s.slot);
+      const b = h(
+        'button',
+        'cat',
+        `<span class="cat-ico">${SLOT_ICONS[s.slot] ?? ''}</span><span class="cat-txt"><b>${esc(s.label)}</b><small>${esc(SLOT_HINTS[s.slot] ?? '')}</small></span><span class="cat-val">${f.dots
+          .map((c) => `<i class="dot" style="background:${c}"></i>`)
+          .join('')}<em>${esc(f.name)}</em></span><span class="chev">›</span>`,
+      );
+      b.dataset.slot = s.slot;
+      b.style.setProperty('--i', String(i));
+      if (s.slot === this.slot) b.dataset.autofocus = '';
       b.addEventListener('click', () => {
         audio.click();
         this.slot = s.slot;
         this.sub = s.slot;
-        this.render();
+        this.setView('opts');
       });
-      this.slotsEl.appendChild(b);
-    }
+      this.catsEl.appendChild(b);
+    });
+    if (had) this.catsEl.querySelector<HTMLElement>(`[data-slot="${had}"]`)?.focus({ preventScroll: true });
+    this.onView?.(this.tab === 'interior', this.slot);
+  }
+
+  private renderOpts() {
+    const label = this.slots().find((s) => s.slot === this.slot)?.label ?? '';
+    this.backBtn.querySelector('.ob-ico')!.innerHTML = SLOT_ICONS[this.slot] ?? '';
+    this.backBtn.querySelector('b')!.textContent = label;
+    this.backBtn.querySelector('small')!.textContent = SLOT_HINTS[this.slot] ?? '';
+
+    // re-rendering replaces the buttons: remember which one had the focus
+    const had = document.activeElement as HTMLElement | null;
+    const keep = had && this.el.contains(had) ? (had.dataset.id ? `.opt[data-id="${had.dataset.id}"]` : had.closest('.subslots') ? '.subslots .on' : null) : null;
+
     const subs: { slot: Slot; label: string }[] | undefined =
       SUB_SLOTS[this.slot as keyof typeof SUB_SLOTS] ?? INTERIOR_SUB_SLOTS[this.slot as keyof typeof INTERIOR_SUB_SLOTS];
     this.subEl.innerHTML = '';
@@ -531,7 +685,7 @@ export class GarageScreen {
       b.addEventListener('click', () => {
         audio.click();
         this.sub = s.slot;
-        this.render();
+        this.renderOpts();
       });
       this.subEl.appendChild(b);
     }
@@ -539,16 +693,34 @@ export class GarageScreen {
     this.onView?.(this.tab === 'interior', slot);
     this.optsEl.innerHTML = '';
     const opts: PartOption[] = optionsFor(slot);
+    const colours = opts.every((o) => !!this.swatchOf(slot, o.id));
+    this.optsEl.classList.toggle('colours', colours);
+    const tech = this.tab === 'tech';
+    const cur = displayStats(computeStats(this.build));
     for (const o of opts) {
-      const card = h('button', `opt${this.build[slot] === o.id ? ' on' : ''}`);
+      const on = this.build[slot] === o.id;
+      const card = h('button', `opt${on ? ' on' : ''}`);
       card.dataset.id = o.id;
+      if (on) card.dataset.autofocus = '';
       const sw = this.swatchOf(slot, o.id);
-      card.innerHTML = `${sw ? `<i class="swatch" style="background:${sw}"></i>` : ''}<b>${esc(o.name)}</b><small>${esc(o.desc)}</small>`;
+      let deltas = '';
+      if (tech && !on) {
+        const nx = displayStats(computeStats({ ...this.build, [slot]: o.id }));
+        deltas = STAT_LABELS.map(([k, l]) => {
+          const d = nx[k] - cur[k];
+          return Math.abs(d) < 0.05 ? '' : `<span class="dl ${d > 0 ? 'up' : 'down'}">${d > 0 ? '▲' : '▼'} ${l} ${d > 0 ? '+' : ''}${d.toFixed(1)}</span>`;
+        }).join('');
+        deltas = deltas ? `<span class="deltas">${deltas}</span>` : '<span class="deltas"><span class="dl">Sem efeito nas barras</span></span>';
+      }
+      card.innerHTML = `${sw ? `<i class="swatch" style="background:${sw}"></i>` : ''}<span class="opt-txt"><b>${esc(o.name)}</b><small>${esc(o.desc)}</small>${deltas}</span>${
+        on ? '<em class="opt-on">Equipado</em>' : ''
+      }`;
       card.addEventListener('click', () => {
         audio.click();
         this.build = { ...this.build, [slot]: o.id };
         this.onChange?.(this.build, slot);
-        this.render();
+        this.renderOpts();
+        this.renderStats();
       });
       card.addEventListener('pointerenter', (e) => {
         if (e.pointerType === 'mouse') this.renderStats({ ...this.build, [slot]: o.id });
@@ -556,7 +728,7 @@ export class GarageScreen {
       card.addEventListener('pointerleave', () => this.renderStats());
       this.optsEl.appendChild(card);
     }
-    this.renderStats();
+    if (keep) this.el.querySelector<HTMLElement>(keep)?.focus({ preventScroll: true });
   }
 
   /** CSS background of the colour an option stands for, or null for non-colour options. */
@@ -575,15 +747,20 @@ export class GarageScreen {
   private renderStats(preview?: CarBuild) {
     const cur = displayStats(computeStats(this.build));
     const pre = preview ? displayStats(computeStats(preview)) : cur;
-    this.statsEl.innerHTML = STAT_LABELS.map(([k, label]) => {
+    const r = rating(pre);
+    const r0 = rating(cur);
+    const dpi = r.pi - r0.pi;
+    this.statsEl.innerHTML = `<div class="pi pi-${r.cls}"><span class="pi-cls">${r.cls}</span><span class="pi-num">${r.pi}</span>${
+      dpi ? `<em class="${dpi > 0 ? 'up' : 'down'}">${dpi > 0 ? '+' : ''}${dpi}</em>` : ''
+    }</div><div class="stats">${STAT_LABELS.map(([k, label]) => {
       const a = cur[k];
       const b = pre[k];
       const lo = Math.min(a, b);
       const diff = b - a;
       return `<div class="stat"><span>${label}</span><div class="sbar"><i style="width:${lo * 10}%"></i>${
         Math.abs(diff) > 0.05 ? `<em class="${diff > 0 ? 'up' : 'down'}" style="left:${lo * 10}%;width:${Math.abs(diff) * 10}%"></em>` : ''
-      }</div><b>${b.toFixed(1)}</b></div>`;
-    }).join('');
+      }</div><b class="${Math.abs(diff) > 0.05 ? (diff > 0 ? 'up' : 'down') : ''}">${b.toFixed(1)}</b></div>`;
+    }).join('')}</div>`;
   }
 }
 
