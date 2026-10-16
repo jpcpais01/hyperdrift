@@ -8,6 +8,7 @@ import {
   MeshStandardMaterial,
   RingGeometry,
   Scene,
+  Vector3,
   type PerspectiveCamera,
 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
@@ -39,6 +40,8 @@ function platformTexture(): CanvasTexture | null {
   return t;
 }
 
+const ORIGIN = new Vector3();
+
 /** The garage: a floating turntable above the clouds. */
 export class GarageScene {
   readonly scene = new Scene();
@@ -49,13 +52,14 @@ export class GarageScene {
   private lastX = 0;
   private idle = 0;
 
-  constructor(sky: Sky) {
+  constructor(private readonly sky: Sky) {
     sky.addTo(this.scene);
     const top = new Mesh(
       new CylinderGeometry(4.2, 4.2, 0.3, 64),
       new MeshStandardMaterial({ color: 0xffffff, map: platformTexture(), roughness: 0.35, metalness: 0.6 }),
     );
     top.position.y = -0.15;
+    top.receiveShadow = true;
     const base = new Mesh(new CylinderGeometry(4.0, 1.2, 2.4, 48, 1, true), new MeshStandardMaterial({ color: 0x181b21, roughness: 0.6, metalness: 0.7 }));
     base.position.y = -1.5;
     const rim = new Mesh(new RingGeometry(4.18, 4.32, 64), new MeshBasicMaterial({ color: new Color(0.3, 1.3, 1.9) }));
@@ -75,6 +79,7 @@ export class GarageScene {
       this.car.dispose();
     }
     this.car = buildCar(build);
+    this.sky.castShadows(this.car.root);
     this.turntable.add(this.car.root);
   }
 
@@ -107,7 +112,7 @@ export class GarageScene {
     camera.fov = 40;
     camera.updateProjectionMatrix();
     if (this.car) this.car.setBoost(0, time);
-    sky.update(time, camera.position, -80);
+    sky.update(time, camera.position, -80, ORIGIN);
     this.scene.fog = null;
   }
 }

@@ -42,6 +42,7 @@ class App {
     const ui = document.getElementById('ui')!;
     this.renderer = new Renderer(canvas);
     this.sky.bakeEnvironment(this.renderer.gl);
+    this.sky.enableShadows(this.renderer.gl);
     this.world = new RaceWorld(this.sky);
     this.garageScene = new GarageScene(this.sky);
     this.build = storage.loadBuild();

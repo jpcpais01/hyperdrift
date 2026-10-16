@@ -90,11 +90,71 @@ function roadTexture(): Texture | null {
   return t;
 }
 
+/**
+ * Asphalt micro-relief (normal map) and roughness variation, generated once.
+ * Gives the low sun a broken, grainy specular sheen along the road instead of a flat plastic one.
+ */
+function roadDetailTextures(): { normal: Texture; rough: Texture } | null {
+  const N = 256;
+  const nc = canvas(N, N);
+  const rc = canvas(N, N);
+  if (!nc || !rc) return null;
+  let seed = 99;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  // height: fine grain + a few coarse blotches (wraps seamlessly)
+  const h = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) h[i] = rnd();
+  const coarse = new Float32Array(16 * 16).map(() => rnd());
+  const cs = (x: number, y: number) => {
+    const fx = (x / N) * 16;
+    const fy = (y / N) * 16;
+    const x0 = Math.floor(fx);
+    const y0 = Math.floor(fy);
+    const tx = fx - x0;
+    const ty = fy - y0;
+    const at = (a: number, b: number) => coarse[(b & 15) * 16 + (a & 15)];
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
+    return (at(x0, y0) * (1 - sx) + at(x0 + 1, y0) * sx) * (1 - sy) + (at(x0, y0 + 1) * (1 - sx) + at(x0 + 1, y0 + 1) * sx) * sy;
+  };
+  const H = (x: number, y: number) => h[((y + N) % N) * N + ((x + N) % N)];
+  const ni = nc[1].createImageData(N, N);
+  const ri = rc[1].createImageData(N, N);
+  for (let y = 0; y < N; y++) {
+    for (let x = 0; x < N; x++) {
+      const dx = (H(x + 1, y) - H(x - 1, y)) * 0.9;
+      const dy = (H(x, y + 1) - H(x, y - 1)) * 0.9;
+      const l = Math.hypot(dx, dy, 1);
+      const o = (y * N + x) * 4;
+      ni.data[o] = ((-dx / l) * 0.5 + 0.5) * 255;
+      ni.data[o + 1] = ((dy / l) * 0.5 + 0.5) * 255;
+      ni.data[o + 2] = (1 / l) * 0.5 * 255 + 127;
+      ni.data[o + 3] = 255;
+      // polished, darker tyre lines read smoother; worn grain rougher
+      const r = 0.42 + cs(x, y) * 0.3 + (H(x, y) - 0.5) * 0.12;
+      ri.data[o] = ri.data[o + 1] = ri.data[o + 2] = Math.max(0, Math.min(1, r)) * 255;
+      ri.data[o + 3] = 255;
+    }
+  }
+  nc[1].putImageData(ni, 0, 0);
+  rc[1].putImageData(ri, 0, 0);
+  const normal = new CanvasTexture(nc[0]);
+  const rough = new CanvasTexture(rc[0]);
+  for (const t of [normal, rough]) {
+    t.wrapS = t.wrapT = RepeatWrapping;
+    t.anisotropy = 8;
+  }
+  // grain much finer than the lane-marking texture; roughness blotches broader
+  normal.repeat.set(5, 5);
+  rough.repeat.set(1.5, 1.5);
+  return { normal, rough };
+}
+
 function structureTexture(): Texture | null {
   const cv = canvas(256, 256);
   if (!cv) return null;
   const [c, g] = cv;
-  g.fillStyle = '#c9ccd2';
+  g.fillStyle = '#a7adb7';
   g.fillRect(0, 0, 256, 256);
   g.fillStyle = 'rgba(0,0,0,0.12)';
   for (let x = 0; x < 256; x += 64) g.fillRect(x, 0, 2, 256);
@@ -200,10 +260,23 @@ export class TrackView {
   private emitters: InstancedMesh | null = null;
   private padMat: MeshBasicMaterial;
   private materials: Material[] = [];
+  private textures: Texture[] = [];
 
   constructor(track: Track) {
-    const roadMat = withBakedLight(new MeshStandardMaterial({ map: roadTexture(), roughness: 0.55, metalness: 0.15, vertexColors: true }));
-    const structMat = withBakedLight(new MeshStandardMaterial({ map: structureTexture(), roughness: 0.4, metalness: 0.55, vertexColors: true }));
+    const detail = roadDetailTextures();
+    const roadMat = withBakedLight(
+      new MeshStandardMaterial({
+        map: roadTexture(),
+        normalMap: detail?.normal ?? null,
+        roughnessMap: detail?.rough ?? null,
+        roughness: 1,
+        metalness: 0.05,
+        vertexColors: true,
+      }),
+    );
+    roadMat.normalScale.set(0.3, 0.3);
+    if (detail) this.textures.push(detail.normal, detail.rough);
+    const structMat = withBakedLight(new MeshStandardMaterial({ map: structureTexture(), roughness: 0.38, metalness: 0.6, vertexColors: true }));
     const lightMatL = new MeshBasicMaterial({ color: LEFT_GLOW.clone().multiplyScalar(2.2) });
     const lightMatR = new MeshBasicMaterial({ color: RIGHT_GLOW.clone().multiplyScalar(2.2) });
     this.materials.push(roadMat, structMat, lightMatL, lightMatR);
@@ -405,7 +478,10 @@ export class TrackView {
         [glowR, lightMatR],
       ] as [StripBuilder, Material][]) {
         const g = b.build();
-        if (g) this.group.add(new Mesh(g, m));
+        if (!g) continue;
+        const mesh = new Mesh(g, m);
+        mesh.receiveShadow = m === roadMat || m === structMat;
+        this.group.add(mesh);
       }
     }
 
@@ -579,6 +655,7 @@ export class TrackView {
     });
     for (const m of this.materials) m.dispose();
     this.padTex?.dispose();
+    for (const t of this.textures) t.dispose();
   }
 }
 
