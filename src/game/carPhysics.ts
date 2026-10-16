@@ -12,6 +12,18 @@ export interface DriveInput {
 export const GRAVITY = 24;
 const CAR_HALF_WIDTH = 1.05;
 
+/** Collision box in car space (+z forward), measured from the assembled parts. */
+export interface Hitbox {
+  /** distance from the origin to the nose */
+  front: number;
+  /** distance from the origin to the tail (positive) */
+  back: number;
+  halfWidth: number;
+  height: number;
+}
+
+export const DEFAULT_HITBOX: Hitbox = { front: 2.25, back: 2.2, halfWidth: 0.98, height: 1.3 };
+
 export type CarEvent =
   | { type: 'land'; strength: number }
   | { type: 'wall'; strength: number }
@@ -33,6 +45,9 @@ export class CarPhysics {
   readonly right = new Vector3(-1, 0, 0);
   readonly quat = new Quaternion();
   yawRate = 0;
+  /** extra yaw from car-to-car impacts (rad/s), decays on its own */
+  spin = 0;
+  hitbox: Hitbox = DEFAULT_HITBOX;
   grounded = true;
   airTime = 0;
   trackIndex = 0;
@@ -86,6 +101,7 @@ export class CarPhysics {
     this.right.copy(fr.right);
     this.vel.set(0, 0, 0);
     this.yawRate = 0;
+    this.spin = 0;
     this.grounded = true;
     this.trackIndex = fr.index;
     this.lastGroundIndex = fr.index;
@@ -256,6 +272,13 @@ export class CarPhysics {
     this.lastForward = this.forwardSpeed;
     this.prevBrake = input.brake;
 
+    if (this.spin !== 0) {
+      rotateAround(this.fwd, this.up, this.spin * dt);
+      this.right.crossVectors(this.fwd, this.up).normalize();
+      this.spin *= Math.exp(-(this.grounded ? 3.2 : 1.2) * dt);
+      if (Math.abs(this.spin) < 0.01) this.spin = 0;
+    }
+
     this.pos.addScaledVector(this.vel, dt);
     this.updateQuat();
 
@@ -294,6 +317,18 @@ export class CarPhysics {
     if (this.airTime > 0.25) this.events.push({ type: 'land', strength: Math.min(1, into / 25 + this.airTime * 0.2) });
   }
 
+  /**
+   * Body reaction to a car-to-car hit: the chassis rocks away from the impact.
+   * `side`/`lon` are the hit direction in car space (+ = right / front), strength 0..1.
+   */
+  jolt(side: number, lon: number, strength: number) {
+    const k = Math.min(1, strength);
+    this.rollVel += side * k * 2.2;
+    this.pitchVel -= lon * k * 1.4;
+    this.heaveVel += k * 1.1;
+    if (k > 0.55 && this.drifting) this.endDrift(false);
+  }
+
   private endDrift(reward = true) {
     if (reward && this.driftTime > 0.7) {
       const amount = Math.min(this.driftTime, 3.2) * 0.42 * this.stats.driftCharge;
@@ -320,6 +355,7 @@ export class CarPhysics {
     this.drifting = false;
     this.airTime = 0;
     this.yawRate = 0;
+    this.spin = 0;
     this.events.push({ type: 'respawn' });
   }
 

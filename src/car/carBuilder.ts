@@ -1,5 +1,6 @@
 import {
   BufferAttribute,
+  Box3,
   BufferGeometry,
   Color,
   Euler,
@@ -48,6 +49,8 @@ export interface CarVisual {
   body: Group;
   materials: CarMaterials;
   flames: Mesh[];
+  /** tight collision box measured from the assembled parts (car space) */
+  hitbox: { front: number; back: number; halfWidth: number; height: number };
   updateWheels(state: WheelState): void;
   setBoost(amount: number, time: number): void;
   dispose(): void;
@@ -141,6 +144,26 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     body.add(mesh);
   }
 
+  // collision box: the union of every visible part plus the wheels, so a long
+  // splitter, wide skirts or a tall wing all count
+  const bounds = new Box3();
+  for (const child of body.children) {
+    const g = (child as Mesh).geometry;
+    if (!g) continue;
+    g.computeBoundingBox();
+    if (g.boundingBox) bounds.union(g.boundingBox);
+  }
+  const wr = SKELETON.wheelRadius;
+  bounds.expandByPoint(_p.set(SKELETON.wheelX + SKELETON.wheelWidth / 2, 0, SKELETON.frontAxleZ + wr));
+  bounds.expandByPoint(_p.set(-SKELETON.wheelX - SKELETON.wheelWidth / 2, 0, SKELETON.rearAxleZ - wr));
+  const hitbox = {
+    front: bounds.max.z,
+    back: -bounds.min.z,
+    // mirrors/flares stick out a little: trim the sides so scrapes feel fair
+    halfWidth: Math.max(Math.abs(bounds.min.x), bounds.max.x) * 0.96,
+    height: bounds.max.y,
+  };
+
   // boost flames
   const flames: Mesh[] = [];
   if (!opts.ghost) {
@@ -198,6 +221,7 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     body,
     materials: mats,
     flames,
+    hitbox,
     updateWheels(state: WheelState) {
       for (let i = 0; i < 4; i++) {
         const [x, z, side] = wheelPos[i];

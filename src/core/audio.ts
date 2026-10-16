@@ -208,6 +208,17 @@ export class AudioSystem {
   wall(strength: number) {
     this.burst(0.25, 900, 0.3 * strength);
   }
+  /** car-to-car hit: a body thump plus a metallic crunch, scaled by strength */
+  bump(strength: number) {
+    const k = Math.min(1, strength);
+    this.tone(55 + 30 * k, 0.18, 'sine', 0.4 * k, 0.45);
+    this.burst(0.12 + 0.12 * k, 160, 0.35 * k, 'lowpass');
+    this.burst(0.08 + 0.1 * k, 1600 + 900 * Math.random(), 0.22 * k);
+  }
+  /** bodywork grinding along another car */
+  scrape(strength: number) {
+    this.burst(0.09, 2400 + 1200 * Math.random(), 0.1 * Math.min(1, strength));
+  }
   beep(high = false) {
     this.tone(high ? 1046 : 523, high ? 0.5 : 0.22, 'square', 0.12);
   }
