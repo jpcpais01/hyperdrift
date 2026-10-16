@@ -8,6 +8,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 18:00 UTC',
     entries: [
+      'New ↻ ATUALIZAR button on the menu: tap it to check for the newest version of the game, install it and reload straight into it. Updates found in the background also no longer reload the game mid-race; they wait until you are back on the menu or in the garage.',
       "Phones now go fullscreen and sideways on your first tap, and snap back to it if you swipe out of fullscreen or switch apps. On iPhone, where browsers can't rotate the screen for you, a new animated hint asks you to turn your phone (and shows how to add Hyperdrift to your home screen for true fullscreen).",
       'Tilt steering on phones: open CONTROLOS on the menu (or Controlos in pause) and pick Inclinação to steer by turning your phone like a wheel. A live wheel preview, three sensitivity levels and one-tap calibration; mid-race, tap the tilt bar to recentre. Brake moves under your left thumb, gas stays on the right, and your choice is remembered.',
     ],
