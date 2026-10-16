@@ -24,8 +24,9 @@ import { nav } from './ui/nav';
 import { computeStats, displayStats } from './car/stats';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
+import { FreeRoam, ZoneWorld, type ZonePayload } from './zone/freeRoam';
 
-type State = 'menu' | 'garage' | 'race' | 'results' | 'mp';
+type State = 'menu' | 'garage' | 'race' | 'results' | 'mp' | 'zone';
 
 const CLOSE_MESSAGES: Record<RoomCloseReason, string> = {
   left: '',
@@ -61,6 +62,10 @@ class App {
   private state: State = 'menu';
   private race: Race | null = null;
   private raceMode: RaceMode = 'race';
+  /** the drift zone: built on the first visit, then kept */
+  private zoneWorld: ZoneWorld | null = null;
+  private zone: FreeRoam | null = null;
+  private zoneSeq = -1;
   private build: CarBuild;
   private settings = storage.loadSettings();
   private last = performance.now();
@@ -123,7 +128,7 @@ class App {
         this.menu.setControlsLabel(controlsLabel());
       };
       panel.onClose = () => {
-        if (this.state === 'race' && this.race?.paused) this.pause.show(true);
+        if ((this.state === 'race' && this.race?.paused) || (this.state === 'zone' && this.zone && (this.zone.paused || this.zone.inputLocked))) this.pause.show(true);
       };
       this.menu.onControls = () => panel.show(true);
       this.pause.onControls = () => {
@@ -173,6 +178,7 @@ class App {
     this.menu.onRace = () => this.startRace('race');
     this.menu.onTimeTrial = () => this.startRace('timetrial');
     this.menu.onGarage = () => this.go('garage');
+    this.menu.onZone = () => this.startZone();
     this.menu.onOnline = () => this.go('mp');
     this.bindMultiplayer();
     this.menu.onToggleSound = () => {
@@ -195,26 +201,34 @@ class App {
     this.results.onGarage = () => this.go('garage');
     this.results.onMenu = () => (this.room ? this.leaveRoom() : this.go('menu'));
     const togglePause = () => {
+      if (this.state === 'zone' && this.zone) return this.setPaused(!(this.zone.paused || this.zone.inputLocked));
       if (this.state !== 'race' || !this.race) return;
       this.setPaused(!this.race.paused);
     };
     this.input.onPause = togglePause;
     nav.onStart = togglePause;
     const cycleCamera = () => {
-      if (this.state !== 'race' || !this.race || this.race.paused) return;
+      const live = this.state === 'zone' ? this.zone : this.state === 'race' ? this.race : null;
+      if (!live || live.paused) return;
       this.settings.camZoom = ((this.settings.camZoom + 1) % 4) as CameraZoom;
       storage.saveSettings(this.settings);
-      this.race.setCameraZoom(this.settings.camZoom);
+      live.setCameraZoom(this.settings.camZoom);
       this.hud.setCameraZoom(this.settings.camZoom, `CÂMARA · ${CAMERA_ZOOM_LABELS[this.settings.camZoom]}`);
     };
     this.input.onCamera = cycleCamera;
     this.hud.onCamera = cycleCamera;
     this.hud.onPause = togglePause;
     this.pause.onResume = () => this.setPaused(false);
-    this.pause.onRestart = () => this.startRace(this.raceMode);
-    this.pause.onQuit = () => (this.race?.net ? this.go('mp') : this.go('menu'));
+    this.pause.onRestart = () => {
+      if (this.state !== 'zone' || !this.zone) return this.startRace(this.raceMode);
+      this.zone.restart();
+      this.setPaused(false);
+    };
+    this.pause.onQuit = () => (this.race?.net || this.zone?.net ? this.go('mp') : this.go('menu'));
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.state === 'race' && this.race && !this.race.paused) this.setPaused(true);
+      if (!document.hidden) return;
+      if (this.state === 'race' && this.race && !this.race.paused) this.setPaused(true);
+      if (this.state === 'zone' && this.zone && !this.zone.paused && !this.zone.inputLocked) this.setPaused(true);
     });
 
     nav.init();
@@ -233,16 +247,17 @@ class App {
   }
 
   private setPaused(p: boolean) {
-    if (!this.race) return;
-    if (this.race.net) {
-      // online the race goes on: the menu just takes my hands off the wheel
-      this.race.inputLocked = p;
+    const live = this.state === 'zone' ? this.zone : this.race;
+    if (!live) return;
+    if (live.net) {
+      // online the game goes on: the menu just takes my hands off the wheel
+      live.inputLocked = p;
       this.pause.show(p);
       if (!p) this.controls?.show(false);
       this.input.clear();
       return;
     }
-    this.race.paused = p;
+    live.paused = p;
     this.pause.show(p);
     if (!p) this.controls?.show(false);
     this.input.clear();
@@ -257,6 +272,11 @@ class App {
       this.race.dispose();
       this.race = null;
     }
+    if (this.zone) {
+      this.zone.dispose();
+      this.zone = null;
+      this.zoneSeq = -1;
+    }
     if (audio.ctx && audio.ctx.state === 'suspended') void audio.ctx.resume();
   }
 
@@ -268,17 +288,19 @@ class App {
   private go(state: State) {
     this.renderer.setOverlay(null);
     // the menu and the lobby share a live backdrop; an online race keeps running behind the lobby
+    const keepZone = !!this.zone?.net && state === 'mp' && !!this.room;
     const keep =
-      this.race &&
-      ((state === 'menu' && this.race.mode === 'attract') || (state === 'mp' && (this.race.mode === 'attract' || (!!this.race.net && !!this.room))));
-    if (keep) this.race!.setSpectate(true);
+      keepZone ||
+      (this.race && ((state === 'menu' && this.race.mode === 'attract') || (state === 'mp' && (this.race.mode === 'attract' || (!!this.race.net && !!this.room)))));
+    if (keepZone) this.zone!.setSpectate(true);
+    else if (keep) this.race!.setSpectate(true);
     else this.endRace();
     this.garageScene.stopPreview();
     this.state = state;
-    if (state === 'menu') this.menu.setInfo(storage.loadRecords().bestLap, displayStats(computeStats(this.build)));
+    if (state === 'menu') this.menu.setInfo(storage.loadRecords().bestLap, displayStats(computeStats(this.build)), storage.loadBestDrift());
     this.menu.show(state === 'menu');
     this.mp.show(state === 'mp');
-    if (state === 'mp') this.mp.renderLobby(!!this.race?.net);
+    if (state === 'mp') this.mp.renderLobby(this.liveOnline());
     if (this.atRest()) applyPendingUpdate();
     this.garage.show(state === 'garage', this.build);
     this.garageScene.setActive(state === 'garage');
@@ -297,6 +319,43 @@ class App {
       this.renderer.setScene(this.garageScene.scene);
       this.renderer.setSpeedFx(0, 0);
     }
+  }
+
+  /** What of mine is still going on behind the lobby. */
+  private liveOnline(): 'race' | 'zone' | null {
+    return this.race?.net ? 'race' : this.zone?.net ? 'zone' : null;
+  }
+
+  private hideScreens() {
+    this.garageScene.stopPreview();
+    this.menu.show(false);
+    this.mp.show(false);
+    this.garage.show(false);
+    this.garageScene.setActive(false);
+    this.results.show(null);
+    this.pause.show(false);
+    this.controls?.show(false);
+    this.input.clear();
+    this.input.setTouchVisible(isTouch());
+  }
+
+  /** The drift zone: on my own, or the room's (session) with everybody in it. */
+  private startZone(session: SessionInfo | null = null) {
+    this.endRace();
+    this.renderer.setOverlay(null);
+    this.hideScreens();
+    this.state = 'zone';
+    if (!this.zoneWorld) this.zoneWorld = new ZoneWorld(this.sky);
+    this.zoneWorld.attach();
+    this.renderer.setScene(this.zoneWorld.scene);
+    const net = session && this.room ? { room: this.room, residents: !!(session.payload as ZonePayload | null)?.residents } : null;
+    this.pause.setOnline(!!net, true);
+    const zone = new FreeRoam(this.zoneWorld, this.build, this.input, this.hud, storage.loadBestDrift(), net);
+    zone.onBest = (b) => storage.saveBestDrift(b);
+    zone.setCameraZoom(this.settings.camZoom, true);
+    this.hud.setCameraZoom(this.settings.camZoom);
+    this.zone = zone;
+    this.zoneSeq = session?.seq ?? -1;
   }
 
   private startRace(mode: RaceMode, session: SessionInfo | null = null) {
@@ -358,6 +417,14 @@ class App {
     mp.onGarage = () => this.go('garage');
     mp.onBots = (v) => this.room?.setSettings({ bots: v });
     mp.onResume = () => {
+      if (this.zone?.net) {
+        this.mp.show(false);
+        this.zone.setSpectate(false);
+        this.zone.inputLocked = false;
+        this.state = 'zone';
+        this.input.setTouchVisible(isTouch());
+        return;
+      }
       if (!this.race?.net) return;
       this.mp.show(false);
       this.race.setSpectate(false);
@@ -369,6 +436,15 @@ class App {
       } else this.input.setTouchVisible(isTouch());
     };
     mp.onStart = () => this.hostStart();
+    mp.onZone = () => {
+      const room = this.room;
+      // a drop-in session: whoever joins the room later lands straight in the zone
+      if (room?.isHost) room.startSession('zone', { residents: room.settings.bots } satisfies ZonePayload, 600, true);
+    };
+    mp.onEnterZone = () => {
+      const s = this.room?.session;
+      if (s?.kind === 'zone') this.startZone(s);
+    };
   }
 
   private async createRoom() {
@@ -407,7 +483,8 @@ class App {
   private attachRoom(room: Room) {
     this.room = room;
     room.onRoster = () => {
-      if (this.state === 'mp') this.mp.renderLobby(!!this.race?.net);
+      if (this.state === 'mp') this.mp.renderLobby(this.liveOnline());
+      this.zone?.syncRoster();
       const race = this.race;
       if (race?.net) for (const c of race.cars) if (!c.isPlayer && c.human && !room.players.some((p) => p.id === c.id)) race.dropCar(c.id);
       // my name may have been made unique by the host
@@ -415,6 +492,11 @@ class App {
       if (me && me.name !== this.callSign && !room.isHost) this.mp.setName(me.name);
     };
     room.onSession = (s) => {
+      if (s.kind === 'zone') {
+        if (this.zone?.net && this.zoneSeq === s.seq) return;
+        this.startZone(s);
+        return;
+      }
       if (s.kind !== 'race') return;
       const grid = this.validGrid(s.payload);
       if (!grid || !grid.some((g) => g.id === room.myId)) return;
@@ -425,7 +507,7 @@ class App {
       this.room = null;
       this.mp.setRoom(null);
       this.mp.setName(this.callSign);
-      if (this.race?.net) this.endRace();
+      if (this.race?.net || this.zone?.net) this.endRace();
       if (reason !== 'left') {
         this.go('mp');
         this.mp.setView('home');
@@ -433,6 +515,8 @@ class App {
       }
     };
     this.mp.setRoom(room);
+    // joined while the room is out in the drift zone: straight in
+    if (room.session?.open && room.session.kind === 'zone') this.startZone(room.session);
   }
 
   private validGrid(payload: unknown): NetGridEntry[] | null {
@@ -491,7 +575,7 @@ class App {
     this.time += dt;
 
     // phones always play sideways; tablets only need it for the race itself
-    const needRotate = isTouch() && isPortrait() && (isPhone() || this.state === 'race' || this.state === 'results');
+    const needRotate = isTouch() && isPortrait() && (isPhone() || this.state === 'race' || this.state === 'results' || this.state === 'zone');
     this.rotate.classList.toggle('hidden', !needRotate);
 
     if (this.state === 'garage') {
@@ -499,6 +583,8 @@ class App {
       this.garageScene.update(dt, this.time, this.renderer.camera, this.sky, isPortrait() ? 0 : panel);
       this.renderer.setOverlay(this.garageScene.overlay);
       this.garageScene.renderMirror(this.renderer.gl);
+    } else if (this.zone) {
+      this.zone.update(needRotate && !this.zone.net ? 0 : dt, this.renderer);
     } else if (this.race) {
       // an online race can't wait for anybody to turn their phone
       this.race.update(needRotate && !this.race.net ? 0 : dt, this.renderer);

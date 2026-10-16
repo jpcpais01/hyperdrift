@@ -94,7 +94,7 @@ function roadTexture(): Texture | null {
  * Asphalt micro-relief (normal map) and roughness variation, generated once.
  * Gives the low sun a broken, grainy specular sheen along the road instead of a flat plastic one.
  */
-function roadDetailTextures(): { normal: Texture; rough: Texture } | null {
+export function roadDetailTextures(): { normal: Texture; rough: Texture } | null {
   const N = 256;
   const nc = canvas(N, N);
   const rc = canvas(N, N);

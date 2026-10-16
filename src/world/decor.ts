@@ -15,16 +15,15 @@ import {
   Mesh,
 } from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import type { Track } from '../track/track';
 import { SUN_DIR } from './sky';
 
-function hash3(x: number, y: number, z: number) {
+export function hash3(x: number, y: number, z: number) {
   const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
   return s - Math.floor(s);
 }
 
 /** Smooth 3D value noise + fbm, used once at load to sculpt and bake the islands. */
-function noise3(x: number, y: number, z: number) {
+export function noise3(x: number, y: number, z: number) {
   const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
   const fx = x - xi, fy = y - yi, fz = z - zi;
   const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy), w = fz * fz * (3 - 2 * fz);
@@ -36,7 +35,7 @@ function noise3(x: number, y: number, z: number) {
     w,
   );
 }
-function fbm3(x: number, y: number, z: number, oct = 4) {
+export function fbm3(x: number, y: number, z: number, oct = 4) {
   let v = 0, a = 0.5, f = 1;
   for (let i = 0; i < oct; i++) {
     v += a * noise3(x * f, y * f, z * f);
@@ -62,7 +61,7 @@ const BOUNCE_C = new Color(0.5, 0.42, 0.55);
  * cloud sea, cavity + height AO), so it renders with an unlit material: one cheap draw per LOD.
  * The bake is in object space, so instances are scaled but never rotated.
  */
-function islandGeometry(detail: number, seed: number): BufferGeometry {
+export function islandGeometry(detail: number, seed: number): BufferGeometry {
   let g: BufferGeometry = new IcosahedronGeometry(1, detail);
   g.deleteAttribute('normal');
   g.deleteAttribute('uv');
@@ -140,15 +139,16 @@ export class Decor {
   private lodTimer = 0;
   private rings: Group[] = [];
 
-  constructor(track: Track) {
-    // seeded placement around the track, keeping clear of the deck
+  /** @param avoid points the islands keep clear of (the track's deck, the drift zone's island) */
+  constructor(avoid: Vector3[]) {
+    // seeded placement around the play area, keeping clear of it
     let seed = 12345;
     const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
     let min = new Vector3(Infinity, Infinity, Infinity);
     let max = new Vector3(-Infinity, -Infinity, -Infinity);
-    for (const s of track.samples) {
-      min = min.min(s.pos);
-      max = max.max(s.pos);
+    for (const p of avoid) {
+      min = min.min(p);
+      max = max.max(p);
     }
     const pad = 700;
     let tries = 0;
@@ -156,8 +156,8 @@ export class Decor {
       const p = new Vector3(min.x - pad + rnd() * (max.x - min.x + pad * 2), min.y - 160 + rnd() * 260, min.z - pad + rnd() * (max.z - min.z + pad * 2));
       const scale = 14 + rnd() * rnd() * 70;
       let ok = true;
-      for (let i = 0; i < track.samples.length; i += 10) {
-        if (track.samples[i].pos.distanceTo(p) < scale * 1.8 + 45) {
+      for (const q of avoid) {
+        if (q.distanceTo(p) < scale * 1.8 + 45) {
           ok = false;
           break;
         }

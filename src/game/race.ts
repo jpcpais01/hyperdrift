@@ -38,7 +38,7 @@ export class RaceWorld {
 
   constructor(readonly sky: Sky) {
     this.view = new TrackView(this.track);
-    this.decor = new Decor(this.track);
+    this.decor = new Decor(this.track.samples.filter((_, i) => i % 10 === 0).map((s) => s.pos));
     this.scene.add(this.view.group, this.decor.group, this.particles.points);
   }
 
