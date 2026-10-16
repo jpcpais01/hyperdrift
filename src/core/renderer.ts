@@ -129,12 +129,13 @@ const FinalShader = {
   `,
 };
 
-/** Phones/tablets and weak CPUs get the cheap path (no real-time shadows, fewer noise octaves). */
-export function detectLowEnd(): boolean {
-  if (typeof window === 'undefined') return true;
-  const touch = matchMedia('(pointer: coarse)').matches;
-  return touch || (navigator.hardwareConcurrency ?? 8) <= 4;
-}
+/**
+ * Render resolution: 'auto' adapts to hold the frame rate, a number is a fixed
+ * share of the screen's native resolution (device pixel ratio, capped at 2x).
+ */
+export type RenderScale = 'auto' | 0.5 | 0.75 | 1;
+export const RENDER_SCALES: RenderScale[] = ['auto', 0.5, 0.75, 1];
+export const renderScaleLabel = (s: RenderScale) => (s === 'auto' ? 'AUTO' : `${Math.round(s * 100)}%`);
 
 export class Renderer {
   readonly gl: WebGLRenderer;
@@ -149,22 +150,22 @@ export class Renderer {
   pixelRatio: number;
   private frameAvg = 16.7;
   private adjustTimer = 0;
-  readonly lowEnd: boolean;
+  private scale: RenderScale = 'auto';
 
   constructor(canvas: HTMLCanvasElement) {
     this.gl = new WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     this.gl.toneMapping = ACESFilmicToneMapping;
     this.gl.toneMappingExposure = 1.05;
     this.gl.outputColorSpace = SRGBColorSpace;
-    this.lowEnd = detectLowEnd();
-    this.maxRatio = Math.min(window.devicePixelRatio || 1, this.lowEnd ? 1.5 : 2);
-    this.pixelRatio = Math.min(this.maxRatio, this.lowEnd ? 1 : 1.5);
+    // every device gets the same pipeline; only the resolution scales
+    this.maxRatio = Math.min(window.devicePixelRatio || 1, 2);
+    this.pixelRatio = Math.min(this.maxRatio, 1.5);
 
     this.scene = new Scene();
     this.camera = new PerspectiveCamera(62, 1, 0.3, 6000);
 
     const size = this.gl.getDrawingBufferSize(new Vector2());
-    const rt = new WebGLRenderTarget(size.x, size.y, { type: HalfFloatType, samples: this.lowEnd ? 0 : 4 });
+    const rt = new WebGLRenderTarget(size.x, size.y, { type: HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.gl, rt);
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
@@ -213,8 +214,18 @@ export class Renderer {
     this.bloom.strength = strength;
   }
 
+  /** Fixed resolution, or 'auto' to let dynamic resolution hold the frame rate. */
+  setRenderScale(s: RenderScale) {
+    this.scale = s;
+    this.frameAvg = 16.7;
+    this.adjustTimer = 0;
+    this.pixelRatio = s === 'auto' ? Math.min(this.maxRatio, 1.5) : Math.max(0.5, this.maxRatio * s);
+    this.resize();
+  }
+
   /** Dynamic resolution: keep the frame time near the display's budget. */
   private adapt(dt: number) {
+    if (this.scale !== 'auto') return;
     this.frameAvg += (dt * 1000 - this.frameAvg) * 0.05;
     this.adjustTimer += dt;
     if (this.adjustTimer < 1) return;
