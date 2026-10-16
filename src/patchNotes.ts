@@ -18,6 +18,12 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      "Day and night in the ZONA LIVRE: the sun now moves across the sky over Jardim Celeste (a whole day in 16 minutes), through a rosy dawn, a bright blue noon and a golden sunset into a moonlit night full of stars. After dark the lamps and stone lanterns pour warm pools of light on the ground, every car's headlights throw beams down the road, and underglow really shines. Pick the time yourself in the pause menu (HORA DO DIA: drag along the day or tap Amanhecer, Manhã, Meio-dia, Pôr do sol or Noite) and choose whether time keeps passing. Online, the host's choice sets the sky for everyone in the zone.",
+    ],
+  },
+  {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
       "New ZONA LIVRE: Jardim Celeste, a floating garden island made for drifting, with no laps and no clock. A wide stone plaza with a gymkhana course painted on it, a meadow loop with jumps and light gates, a banked rim road, waterfalls spilling off the edges, a chrome ring to drive through and cherry blossom everywhere. Chain drifts to build a combo (up to ×5), bank it before it runs out and chase your best score. Four resident drivers cruise and drift around the island, and online the host can open the zone for the whole room: friends drop in and out whenever they like, see each other's live combos over their cars and share a scoreboard.",
     ],
   },

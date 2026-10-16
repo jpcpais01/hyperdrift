@@ -390,6 +390,7 @@ const ISLAND_VARIANTS = 3;
  * decks, floating rock debris, colossal mesas on the horizon and the giant sky rings.
  */
 export class Decor {
+  private bakedMat: MeshBasicMaterial | null = null;
   readonly group = new Group();
   private islands: Island[] = [];
   private hi: InstancedMesh[] = [];
@@ -486,6 +487,7 @@ export class Decor {
     // fully baked: an unlit material is all the islands need
     const mat = new MeshBasicMaterial({ vertexColors: true });
     this.materials.push(mat);
+    this.bakedMat = mat;
     for (let v = 0; v < ISLAND_VARIANTS; v++) {
       const hi = new InstancedMesh(islandGeometry(7, v + 1), mat, this.islands.length);
       const lo = new InstancedMesh(islandGeometry(3, v + 1), mat, this.islands.length);
@@ -741,6 +743,11 @@ export class Decor {
       mesh.count = lo[v];
       mesh.instanceMatrix.needsUpdate = true;
     });
+  }
+
+  /** Light on the baked islands (1 by day, dim and blue at night). */
+  setLight(c: Color) {
+    this.bakedMat?.color.copy(c);
   }
 
   update(dt: number, cam: Vector3, time = 0) {

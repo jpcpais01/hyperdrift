@@ -1,4 +1,17 @@
-import { Color, PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
+import {
+  AdditiveBlending,
+  CanvasTexture,
+  Color,
+  InstancedBufferAttribute,
+  InstancedMesh,
+  Matrix4,
+  MeshBasicMaterial,
+  PerspectiveCamera,
+  PlaneGeometry,
+  Quaternion,
+  Scene,
+  Vector3,
+} from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
 import { Cockpit } from '../car/cockpit';
 import { paintById, randomBuild, type CarBuild } from '../car/parts';
@@ -13,11 +26,13 @@ import { emitContactFx, emitDriveFx, emitNitroFx, emitPopFx, emitWallFx, poseCar
 import { CarPhysics, type DriveInput } from '../game/carPhysics';
 import { ChaseCamera, type CameraZoom } from '../game/chaseCamera';
 import { applyCar, packCar, unpackCar, type CarSnapshot } from '../net/carState';
+import { HOST_ID } from '../net/protocol';
 import type { Room } from '../net/room';
 import { formatScore, type Hud } from '../ui/hud';
 import { Decor } from '../world/decor';
 import { Particles } from '../world/particles';
 import type { Sky } from '../world/sky';
+import { clockLabel, dayState, newDayState } from '../world/timeOfDay';
 import { DriftScore, gradeFor } from './driftScore';
 import { circlePath, stadiumPoint, samplePath, WALL_R, ZONE_Y, ZoneLayout } from './layout';
 import { ZoneDriver, type DriverStyle } from './zoneDriver';
@@ -30,8 +45,12 @@ export class ZoneWorld {
   readonly view: ZoneView;
   readonly decor: Decor;
   readonly particles = new Particles();
+  /** headlight beams painted on the ground in front of every car, after dark */
+  readonly beams: InstancedMesh;
+  readonly beamMat: MeshBasicMaterial;
 
   constructor(readonly sky: Sky) {
+    sky.prepareDayEnvs();
     this.view = new ZoneView(this.layout);
     // distant floating islands all around, clear of the zone and of the great tree's island
     const avoid: Vector3[] = [];
@@ -43,12 +62,58 @@ export class ZoneWorld {
     ])
       avoid.push(new Vector3(x, ZONE_Y - 30, z));
     this.decor = new Decor(avoid);
-    this.scene.add(this.view.group, this.decor.group, this.particles.points);
+    this.beamMat = new MeshBasicMaterial({
+      map: beamTexture(),
+      color: 0x000000,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      polygonOffset: true,
+      polygonOffsetFactor: -6,
+      fog: true,
+    });
+    // a quad with its near edge on the origin, stretching forwards (+z)
+    const g = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2).translate(0, 0, 0.5);
+    this.beams = new InstancedMesh(g, this.beamMat, 12);
+    this.beams.instanceColor = new InstancedBufferAttribute(new Float32Array(12 * 3), 3);
+    this.beams.count = 0;
+    this.beams.frustumCulled = false;
+    this.beams.renderOrder = 3;
+    this.scene.add(this.view.group, this.decor.group, this.particles.points, this.beams);
   }
 
   attach() {
     this.sky.addTo(this.scene);
   }
+}
+
+/** Two soft headlight lobes that widen and fade down the road. */
+function beamTexture(): CanvasTexture {
+  const W = 128;
+  const H = 256;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const g = c.getContext('2d')!;
+  g.globalCompositeOperation = 'lighter';
+  // canvas y=0 is the far end of the beam (texture v=1 maps to +z)
+  for (let i = 0; i < 26; i++) {
+    const t = i / 25;
+    const y = H * (1 - 0.06 - t * 0.86);
+    const spread = 0.1 + t * 0.32;
+    const r = W * (0.07 + t * 0.2);
+    const a = 0.11 * Math.pow(1 - t, 1.3) + 0.012;
+    for (const side of [-1, 1]) {
+      const x = W * (0.5 + side * spread * 0.55);
+      const grd = g.createRadialGradient(x, y, 0, x, y, r);
+      grd.addColorStop(0, `rgba(255,255,255,${a})`);
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grd;
+      g.fillRect(0, 0, W, H);
+    }
+  }
+  const tex = new CanvasTexture(c);
+  return tex;
 }
 
 interface ZoneCar {
@@ -100,6 +165,10 @@ interface Resident {
 
 const FIXED = 1 / 120;
 const INTRO = 5.2;
+/** a whole day goes by in 16 minutes */
+export const DAY_RATE = 24 / (16 * 60);
+/** visits start late in the afternoon, so the sun sets on your first drive */
+const START_HOUR = 16.4;
 /** a remote car that has said nothing for this long is parked out of sight (its owner is in the garage…) */
 const QUIET_MS = 2500;
 const IDENTITY = new Quaternion();
@@ -130,6 +199,16 @@ export class FreeRoam {
   private tags: HTMLElement | null = null;
   private spectate = false;
   private orbit = 0;
+  /** time of day (hours) and whether it moves on its own */
+  private hour = START_HOUR;
+  private clockRuns = true;
+  /** online guests: the host's clock as last heard ({h, r, at} on the host clock) */
+  private hostClock: { h: number; r: boolean; at: number } | null = null;
+  private clockTimer = 0;
+  private day = newDayState();
+  private shownClock = '';
+  /** called when the time of day or its running state changes (for the pause menu) */
+  onClock: (() => void) | null = null;
   paused = false;
   /** online pause: the zone goes on, my hands are off the wheel */
   inputLocked = false;
@@ -329,13 +408,113 @@ export class FreeRoam {
   }
 
   private onNetEvent(from: string, d: unknown) {
-    const e = d as { k?: unknown; s?: unknown } | null;
+    const e = d as { k?: unknown; s?: unknown; h?: unknown; r?: unknown; at?: unknown } | null;
+    if (e?.k === 'time') {
+      const h = Number(e.h);
+      const at = Number(e.at);
+      if (from !== HOST_ID || !isFinite(h) || !isFinite(at)) return;
+      this.hostClock = { h, r: !!e.r, at };
+      return;
+    }
     if (!e || e.k !== 'bank') return;
     const score = Math.max(0, Math.floor(Number(e.s) || 0));
     const c = this.cars.find((x) => x.id === from && x.human);
     // only the big ones make the feed: a stream of "BOM"s would bury your own score
     if (!c || score < 3000 || this.spectate) return;
     this.hud.message(`${c.name} · ${gradeFor(score)} ${formatScore(score)}`, 2, 'drift');
+  }
+
+  // ---------------------------------------------------------- time of day
+
+  /** Can I change the time here? (online only the host can, and everybody follows) */
+  get clockEditable() {
+    return !this.net || this.net.room.isHost;
+  }
+
+  get clock() {
+    return { hour: this.hour, running: this.clockRuns, editable: this.clockEditable };
+  }
+
+  /** Pick a time of day (null keeps it) and whether it keeps moving. */
+  setClock(hour: number | null, running: boolean) {
+    if (!this.clockEditable) return;
+    if (hour !== null) this.hour = ((hour % 24) + 24) % 24;
+    this.clockRuns = running;
+    this.applyDay();
+    this.sendClock();
+    this.onClock?.();
+  }
+
+  private sendClock() {
+    const room = this.net?.room;
+    if (!room?.isHost) return;
+    this.clockTimer = 3;
+    room.sendEvent({ k: 'time', h: Math.round(this.hour * 1e4) / 1e4, r: this.clockRuns ? 1 : 0, at: Math.round(room.hostNow()) });
+  }
+
+  private updateClock(dt: number) {
+    const room = this.net?.room;
+    if (room && !room.isHost) {
+      // a guest's sky follows the host's clock
+      const c = this.hostClock;
+      if (c) {
+        const was = this.clockRuns;
+        this.hour = (((c.h + (c.r ? (DAY_RATE * (room.hostNow() - c.at)) / 1000 : 0)) % 24) + 24) % 24;
+        this.clockRuns = c.r;
+        if (was !== c.r) this.onClock?.();
+      }
+    } else {
+      if (this.clockRuns) this.hour = (this.hour + dt * DAY_RATE) % 24;
+      if (room) {
+        // latecomers pick the time up from this heartbeat
+        this.clockTimer -= dt;
+        if (this.clockTimer <= 0) this.sendClock();
+      }
+    }
+    this.applyDay();
+  }
+
+  private applyDay() {
+    const s = dayState(this.hour, this.day);
+    this.world.sky.setDay(s);
+    this.world.view.setDay(s);
+    this.world.decor.setLight(s.ambient);
+    const label = clockLabel(s.hour);
+    if (label !== this.shownClock) {
+      this.shownClock = label;
+      this.hud.setZoneClock(label, s.sinEl < -0.02);
+    }
+  }
+
+  /** After dark every car's headlights throw two soft beams down the road. */
+  private updateHeadlights() {
+    const s = this.day;
+    const lit = Math.max(s.night, s.twilight * 0.5);
+    const w = this.world;
+    w.beamMat.color.setRGB(1.0, 0.93, 0.8).multiplyScalar(1.35 * lit);
+    w.beams.visible = lit > 0.01;
+    if (!w.beams.visible) return;
+    const L = w.layout;
+    let n = 0;
+    for (const c of this.cars) {
+      if (n >= 12 || (c.remote && !c.visual.root.visible)) continue;
+      const d = c.physics.draw;
+      const front = TMP.copy(d.pos).addScaledVector(d.fwd, 2.0);
+      const gy = L.heightAt(front.x, front.z);
+      // fades away as the car leaves the ground, so a jump doesn't paint light on nothing
+      const k = Math.max(0, 1 - Math.max(0, front.y - gy - 0.4) / 2.5);
+      L.normalAt(front.x, front.z, NRM);
+      const f = TMP2.copy(d.fwd).addScaledVector(NRM, -d.fwd.dot(NRM)).normalize();
+      const r = TMP3.crossVectors(NRM, f).normalize();
+      BEAM.makeBasis(r.multiplyScalar(13), NRM, f.multiplyScalar(30));
+      BEAM.setPosition(front.x, gy + 0.07, front.z);
+      w.beams.setMatrixAt(n, BEAM);
+      w.beams.setColorAt(n, BEAMC.setScalar(k));
+      n++;
+    }
+    w.beams.count = n;
+    w.beams.instanceMatrix.needsUpdate = true;
+    if (w.beams.instanceColor) w.beams.instanceColor.needsUpdate = true;
   }
 
   /** Online: stream the cars this machine drives, 20 times a second. */
@@ -421,6 +600,7 @@ export class FreeRoam {
 
   update(dt: number, renderer: Renderer) {
     const camera = renderer.camera;
+    this.updateClock(this.paused ? 0 : dt);
     if (this.paused) {
       this.pose(0);
       return;
@@ -501,6 +681,7 @@ export class FreeRoam {
     renderer.setOverlay(cockpit ? cockpit.scene : null);
     this.world.decor.update(dt, camera.position);
     this.world.view.update(dt, this.time, camera.position, p.pos);
+    this.updateHeadlights();
     this.world.sky.update(t, camera.position, 20, p.pos);
     cockpit?.renderMirror(renderer.gl, this.world.scene);
 
@@ -754,6 +935,8 @@ export class FreeRoam {
     this.tags?.remove();
     this.hud.setZoneBoard(null);
     this.cockpit.dispose();
+    this.world.beams.visible = false;
+    this.world.sky.resetDay();
     for (const c of this.cars) {
       if (c.voice && !c.isPlayer) audio.stopVoice(c.voice);
       this.world.scene.remove(c.visual.root);
@@ -769,4 +952,7 @@ const TMP = new Vector3();
 const TMP2 = new Vector3();
 const TMP3 = new Vector3();
 const TQ = new Quaternion();
+const NRM = new Vector3();
+const BEAM = new Matrix4();
+const BEAMC = new Color();
 const TQ2 = new Quaternion();

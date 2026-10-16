@@ -888,6 +888,10 @@ export class PauseScreen {
   onQuit: (() => void) | null = null;
   onControls: (() => void) | null = null;
   onResolution: (() => string) | null = null;
+  /** drift zone: pick a time of day (null keeps the hour) and whether it moves on its own */
+  onTime: ((hour: number | null, running: boolean) => void) | null = null;
+  private time: { hour: number; running: boolean; editable: boolean } | null = null;
+  private dragging = false;
 
   constructor(root: HTMLElement, withControls: boolean, resolutionLabel: string) {
     this.el = h('div', 'screen pause hidden');
@@ -906,8 +910,23 @@ export class PauseScreen {
           ${row('quit', ICON_EXIT, 'Sair para o menu')}
         </div>
         <footer class="pb-hints">${hint('ok', 'Escolher')}${hint('back', 'Continuar')}</footer>
-      </div>`;
+      </div>
+      <section class="pause-time hidden" aria-label="Hora do dia">
+        <header class="pt-head"><small>Zona livre</small><h3>Hora do dia</h3></header>
+        <div class="pt-clock"><i class="pt-ico"></i><b>--:--</b><span></span></div>
+        <input class="pt-slider" type="range" min="0" max="24" step="0.25" aria-label="Hora do dia">
+        <div class="pt-ticks"><span>0h</span><span>6h</span><span>12h</span><span>18h</span><span>24h</span></div>
+        <div class="pt-presets">${TIME_PRESETS.map(([hr, label]) => `<button class="pt-chip" data-h="${hr}">${label}</button>`).join('')}</div>
+        <button class="pt-run" data-a="run"><span class="switch"><i></i></span><span class="pt-run-txt"><b>O tempo passa</b><small>Um dia inteiro em 16 minutos</small></span></button>
+        <p class="pt-note">Só o anfitrião escolhe a hora · todos veem o mesmo céu</p>
+      </section>`;
     root.appendChild(this.el);
+    const slider = this.el.querySelector<HTMLInputElement>('.pt-slider')!;
+    slider.addEventListener('input', () => {
+      this.dragging = true;
+      if (this.time) this.onTime?.(Number(slider.value), this.time.running);
+    });
+    slider.addEventListener('change', () => (this.dragging = false));
     this.el.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest('button');
       if (!b) return;
@@ -917,7 +936,33 @@ export class PauseScreen {
       if (b.dataset.a === 'quit') this.onQuit?.();
       if (b.dataset.a === 'controls') this.onControls?.();
       if (b.dataset.a === 'res' && this.onResolution) this.setResolutionLabel(this.onResolution());
+      if (b.dataset.a === 'run' && this.time?.editable) this.onTime?.(null, !this.time.running);
+      if (b.dataset.h && this.time?.editable) this.onTime?.(Number(b.dataset.h), this.time.running);
     });
+  }
+
+  /** The drift zone's time-of-day card (null hides it). Cheap to call every frame. */
+  setTime(t: { hour: number; running: boolean; editable: boolean } | null) {
+    const card = this.el.querySelector<HTMLElement>('.pause-time')!;
+    card.classList.toggle('hidden', !t);
+    this.time = t;
+    if (!t) return;
+    card.classList.toggle('locked', !t.editable);
+    const night = t.hour < 5.95 || t.hour > 18.05;
+    card.classList.toggle('night', night);
+    const m = Math.floor(t.hour * 60) % 1440;
+    const label = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+    const b = card.querySelector('.pt-clock b')!;
+    if (b.textContent !== label) {
+      b.textContent = label;
+      card.querySelector('.pt-clock span')!.textContent = timeName(t.hour);
+    }
+    const slider = card.querySelector<HTMLInputElement>('.pt-slider')!;
+    slider.disabled = !t.editable;
+    if (!this.dragging) slider.value = String(t.hour);
+    card.style.setProperty('--pt', String(t.hour / 24));
+    card.querySelector('.pt-run .switch')!.classList.toggle('on', t.running);
+    card.querySelectorAll<HTMLButtonElement>('.pt-chip, .pt-run').forEach((x) => (x.disabled = !t.editable));
   }
 
   show(v: boolean) {
@@ -938,6 +983,25 @@ export class PauseScreen {
   setResolutionLabel(label: string) {
     this.el.querySelector('[data-v="res"]')!.textContent = valueOf(label);
   }
+}
+
+const TIME_PRESETS: [number, string][] = [
+  [6.1, 'Amanhecer'],
+  [9.5, 'Manhã'],
+  [13, 'Meio-dia'],
+  [17.4, 'Pôr do sol'],
+  [23, 'Noite'],
+];
+
+function timeName(h: number) {
+  if (h < 5) return 'Noite';
+  if (h < 7) return 'Amanhecer';
+  if (h < 11) return 'Manhã';
+  if (h < 15) return 'Meio-dia';
+  if (h < 16.8) return 'Tarde';
+  if (h < 18.3) return 'Pôr do sol';
+  if (h < 20) return 'Anoitecer';
+  return 'Noite';
 }
 
 // ---------------------------------------------------------------- controls (mobile)
