@@ -39,7 +39,7 @@ describe('car parts', () => {
 
   it('wheels never pass through the body, for any body, front, rear and skirt, at full travel', () => {
     // the tyre's envelope: radius plus the most upward travel we ever draw, across its width plus steering sweep
-    const reach = SKELETON.wheelRadius + 0.06;
+    const reach = SKELETON.wheelRadius + SKELETON.travelUp;
     let n = 0;
     for (const body of VISUAL_PARTS.body) {
       for (const front of VISUAL_PARTS.front) {

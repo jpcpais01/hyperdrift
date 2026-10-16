@@ -4,7 +4,7 @@ import { audio } from './core/audio';
 import { canLockLandscape, installFirstTouch, isIOS, isPhone, isPortrait, isStandalone, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
 import { tiltSupported } from './core/tilt';
-import { Renderer } from './core/renderer';
+import { RENDER_SCALES, Renderer, renderScaleLabel } from './core/renderer';
 import { applyPendingUpdate, initUpdater } from './core/updater';
 import { CAMERA_ZOOM_LABELS, type CameraZoom } from './game/chaseCamera';
 import { Race, RaceWorld, type NetGridEntry, type RaceMode, type RacePayload } from './game/race';
@@ -70,6 +70,7 @@ class App {
     const canvas = document.getElementById('game') as HTMLCanvasElement;
     const ui = document.getElementById('ui')!;
     this.renderer = new Renderer(canvas);
+    this.renderer.setRenderScale(this.settings.resolution);
     this.sky.bakeEnvironment(this.renderer.gl);
     this.sky.enableShadows(this.renderer.gl);
     this.world = new RaceWorld(this.sky);
@@ -83,12 +84,24 @@ class App {
     // gyroscope steering is a phone thing: only offered on touch devices with the sensor API
     const canTilt = isTouch() && tiltSupported();
     const controlsLabel = () => (this.settings.controls === 'tilt' ? 'CONTROLOS: INCLINAÇÃO' : 'CONTROLOS: BOTÕES');
-    this.menu = new MenuScreen(ui, this.settings.muted, canTilt ? controlsLabel() : null);
+    const resLabel = () => `RESOLUÇÃO: ${renderScaleLabel(this.settings.resolution)}`;
+    this.menu = new MenuScreen(ui, this.settings.muted, canTilt ? controlsLabel() : null, resLabel());
     this.garage = new GarageScreen(ui);
     this.results = new ResultsScreen(ui);
-    this.pause = new PauseScreen(ui, canTilt);
+    this.pause = new PauseScreen(ui, canTilt, resLabel());
     this.mp = new MultiplayerScreen(ui, this.callSign);
     storage.saveCallSign(this.callSign);
+    const cycleResolution = () => {
+      const i = RENDER_SCALES.indexOf(this.settings.resolution);
+      this.settings.resolution = RENDER_SCALES[(i + 1) % RENDER_SCALES.length];
+      storage.saveSettings(this.settings);
+      this.renderer.setRenderScale(this.settings.resolution);
+      this.menu.setResolutionLabel(resLabel());
+      this.pause.setResolutionLabel(resLabel());
+      return resLabel();
+    };
+    this.menu.onResolution = cycleResolution;
+    this.pause.onResolution = cycleResolution;
     if (canTilt) {
       const tilt = this.input.tilt;
       tilt.sens = this.settings.tiltSens;
