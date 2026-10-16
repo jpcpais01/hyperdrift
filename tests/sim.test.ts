@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Track } from '../src/track/track';
+import { Track, trackClearance } from '../src/track/track';
 import { SKYWAY } from '../src/track/skyway';
 import { CarPhysics } from '../src/game/carPhysics';
 import { AiDriver } from '../src/game/ai';
@@ -8,7 +8,7 @@ import { DEFAULT_BUILD, randomBuild } from '../src/car/parts';
 
 const track = new Track(SKYWAY);
 
-function simulate(build = DEFAULT_BUILD, seconds = 140, skill = 0.97) {
+function simulate(build = DEFAULT_BUILD, seconds = (track.length / 3675) * 140, skill = 0.97) {
   const car = new CarPhysics(track, computeStats(build));
   car.reset(track.length - 12, 0);
   const ai = new AiDriver(track, skill, 1);
@@ -39,6 +39,12 @@ describe('track', () => {
     expect(track.closureError).toBeLessThan(40);
     expect(track.length).toBeGreaterThan(3000);
   });
+  it('never runs into itself (helix, crossings)', () => {
+    expect(trackClearance(track).ratio).toBeGreaterThan(1);
+  });
+  it('names the set pieces the scenery is built around', () => {
+    for (const m of ['start', 'bridge', 'hairpin', 'helix', 'tunnel', 'loop']) expect(track.marks[m]).toBeDefined();
+  });
   it('projects positions back onto the track', () => {
     for (const s of [10, 900, 1500, 2600]) {
       const p = track.pointAt(s, 3, 1);
@@ -60,7 +66,7 @@ describe('physics', () => {
   });
   it('works for several random part combinations', () => {
     for (const seed of [1, 2, 3]) {
-      const r = simulate(randomBuild(seed), 60, 0.93);
+      const r = simulate(randomBuild(seed), (track.length / 3675) * 60, 0.93);
       console.log(seed, r);
       expect(r.respawns).toBe(0);
       expect(r.laps).toBeGreaterThan(0.8);
@@ -96,8 +102,33 @@ describe('physics', () => {
       if (was && !car.grounded) takeoffs++;
       was = car.grounded;
     }
-    // ~90 s is a bit over a lap and a half: two ramps per lap, nothing else
+    // ~90 s is about a lap: three launches (the sky dive's knuckle and the two ramps), nothing else
     expect(takeoffs).toBeLessThanOrEqual(4);
+  });
+  it('the sky dive launches the car over its knuckle and lands it on the slope', () => {
+    const car = new CarPhysics(track, computeStats(DEFAULT_BUILD));
+    const dive = track.marks.dive;
+    car.reset(dive.s0 - 200, 0);
+    // arriving at racing speed
+    car.vel.copy(car.fwd).multiplyScalar(58);
+    const ai = new AiDriver(track, 0.97, 1);
+    let takeoff = -1;
+    let landing = -1;
+    let was = true;
+    for (let t = 0; t < 20 && landing < 0; t += 1 / 120) {
+      car.step(1 / 120, ai.drive(car, [car], 1 / 120));
+      for (const e of car.events) expect(e.type).not.toBe('respawn');
+      car.events.length = 0;
+      if (was && !car.grounded && takeoff < 0) takeoff = car.trackS;
+      if (!was && car.grounded && takeoff >= 0) landing = car.trackS;
+      if (landing >= 0) console.log('sky dive flight', takeoff.toFixed(0), '->', landing.toFixed(0), 'speed', car.speed.toFixed(0));
+      was = car.grounded;
+    }
+    expect(takeoff).toBeGreaterThan(dive.s0 - 60);
+    expect(takeoff).toBeLessThan(dive.s0 + 10);
+    // a proper flight, coming down before the hairpin
+    expect(landing - takeoff).toBeGreaterThan(60);
+    expect(landing).toBeLessThan(track.marks.hairpin.s0);
   });
   it('technical parts change how fast the car is', () => {
     const slow = computeStats({ ...DEFAULT_BUILD, engine: 'rotary', weight: 'heavy' });

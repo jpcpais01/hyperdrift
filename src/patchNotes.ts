@@ -8,6 +8,16 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      'Skyway Prime has been rebuilt from the ground up as a 4.6 km lap high above the clouds. Climb a suspension bridge to the crest, then fly off the edge on the new sky dive, a ski-jump drop through two glowing halos. Sweep round a steeply banked hairpin that circles a forest island with waterfalls pouring off its cliffs, and spiral up a helix around a giant crystal spire.',
+      "The light tunnel is now a corkscrew: the road rolls a full turn inside a scrolling hex-glass tube while you stay on line. Jumps get gates, halos and landing studs so you can see where to aim, and every lap still has the loop, the esses and the mega jump.",
+      'A far more detailed track: panelled road with racing lines, glass barriers with LED rails, red-and-white kerbs on the corners, lamp posts that light the road at dusk, chevron boards on every tight turn, and pylons that drop down into the cloud sea. A start gantry with real start lights counts you down before each race.',
+      'A richer sky: islands with cliffs, trees and waterfalls, flat-topped mesas on the horizon, drifting rocks, and banks of cumulus cloud you race between.',
+      'Because the lap has changed, lap records and time-trial ghosts on Skyway Prime have been reset.',
+    ],
+  },
+  {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
       "Day and night in the ZONA LIVRE: the sun now moves across the sky over Jardim Celeste (a whole day in 16 minutes), through a rosy dawn, a bright blue noon and a golden sunset into a moonlit night full of stars. After dark the lamps and stone lanterns pour warm pools of light on the ground, every car's headlights throw beams down the road, and underglow really shines. Pick the time yourself in the pause menu (HORA DO DIA: drag along the day or tap Amanhecer, Manhã, Meio-dia, Pôr do sol or Noite) and choose whether time keeps passing. Online, the host's choice sets the sky for everyone in the zone.",
     ],
   },

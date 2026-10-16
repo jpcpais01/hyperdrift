@@ -14,6 +14,7 @@ import { Decor } from '../world/decor';
 import { Particles } from '../world/particles';
 import type { Sky } from '../world/sky';
 import { TrackView } from '../world/trackView';
+import { TrackStructures } from '../world/structures';
 import type { Hud } from '../ui/hud';
 import { AiDriver } from './ai';
 import { collideCars, type CarContact } from './carCollision';
@@ -34,12 +35,14 @@ export class RaceWorld {
   readonly track = new Track(SKYWAY);
   readonly view: TrackView;
   readonly decor: Decor;
+  readonly structures: TrackStructures;
   readonly particles = new Particles();
 
   constructor(readonly sky: Sky) {
     this.view = new TrackView(this.track);
-    this.decor = new Decor(this.track.samples.filter((_, i) => i % 10 === 0).map((s) => s.pos));
-    this.scene.add(this.view.group, this.decor.group, this.particles.points);
+    this.structures = new TrackStructures(this.track, this.view.layout);
+    this.decor = new Decor(this.track);
+    this.scene.add(this.view.group, this.structures.group, this.decor.group, this.particles.points);
   }
 
   attach() {
@@ -158,6 +161,7 @@ export class Race {
   private ghostBest: GhostLap | null;
   private newRecord = false;
   private attractCam = 0;
+  private shotCam: number[] | null = null;
   private attractTarget = 0;
   private acc = 0;
   private done = false;
@@ -209,6 +213,9 @@ export class Race {
     const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
     const startOffset = Number(params.get('start') ?? 0) || 0;
     const autopilot = params.has('autopilot');
+    // ?shot=s,lateral,height,lookAhead,lookLateral: a fixed camera for screenshots of the scenery
+    const shot = params.get('shot')?.split(',').map(Number);
+    if (shot && shot.length >= 3) this.shotCam = shot;
 
     // player starts at the back of the grid, like a proper underdog
     grid.forEach((g, i) => {
@@ -487,6 +494,8 @@ export class Race {
     this.fxTime += dt;
     this.updateVisuals(dt);
     this.world.view.update(dt, this.time);
+    this.world.structures.update(this.time);
+    this.world.structures.setStartLights(this.mode === 'attract' ? 'go' : this.countdown > 0 ? 'red' : 'go');
     this.world.particles.update(dt);
 
     // camera
@@ -496,8 +505,15 @@ export class Race {
     if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
     else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
+    if (this.shotCam) {
+      const [s, lat, h, ahead = 40, latAhead = 0, hAhead = 0] = this.shotCam;
+      const tr = this.world.track;
+      tr.pointAt(s, lat, h, camera.position);
+      camera.up.copy(tr.frameAt(s).up);
+      camera.lookAt(tr.pointAt(s + ahead, latAhead, hAhead, TMP));
+    }
     renderer.setOverlay(cockpit ? cockpit.scene : null);
-    this.world.decor.update(dt, camera.position);
+    this.world.decor.update(dt, camera.position, t);
     // shadows follow the player (or whatever the attract camera is looking at)
     const focus = this.player ? this.player.physics.pos : camera.getWorldDirection(scratchFocus).multiplyScalar(18).add(camera.position);
     this.world.sky.update(t, camera.position, 20, focus);
