@@ -5,6 +5,7 @@ import { audio } from './core/audio';
 import { installFirstTouch, isPortrait, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
 import { Renderer } from './core/renderer';
+import { CAMERA_ZOOM_LABELS, type CameraZoom } from './game/chaseCamera';
 import { Race, RaceWorld, type RaceMode } from './game/race';
 import { storage } from './storage';
 import { Hud } from './ui/hud';
@@ -84,6 +85,15 @@ class App {
       this.setPaused(!this.race.paused);
     };
     this.input.onPause = togglePause;
+    const cycleCamera = () => {
+      if (this.state !== 'race' || !this.race || this.race.paused) return;
+      this.settings.camZoom = ((this.settings.camZoom + 1) % 3) as CameraZoom;
+      storage.saveSettings(this.settings);
+      this.race.setCameraZoom(this.settings.camZoom);
+      this.hud.setCameraZoom(this.settings.camZoom, `CÂMARA · ${CAMERA_ZOOM_LABELS[this.settings.camZoom]}`);
+    };
+    this.input.onCamera = cycleCamera;
+    this.hud.onCamera = cycleCamera;
     this.hud.onPause = togglePause;
     this.pause.onResume = () => this.setPaused(false);
     this.pause.onRestart = () => this.startRace(this.raceMode);
@@ -151,6 +161,8 @@ class App {
     this.renderer.setScene(this.world.scene);
     const ghost = mode === 'timetrial' ? storage.loadGhost() : null;
     const race = new Race(this.world, mode, this.build, this.input, this.hud, ghost);
+    race.setCameraZoom(this.settings.camZoom, true);
+    this.hud.setCameraZoom(this.settings.camZoom);
     race.onFinish = (r) => {
       const g = race.bestGhost;
       if (g) storage.saveGhost(g);

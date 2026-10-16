@@ -14,7 +14,7 @@ import { TrackView } from '../world/trackView';
 import type { Hud } from '../ui/hud';
 import { AiDriver } from './ai';
 import { CarPhysics, type DriveInput } from './carPhysics';
-import { ChaseCamera } from './chaseCamera';
+import { ChaseCamera, type CameraZoom } from './chaseCamera';
 import { GhostPlayer, GhostRecorder, type GhostLap } from './ghost';
 
 /** The static race world (built once, reused by every race and by the menu backdrop). */
@@ -527,6 +527,10 @@ export class Race {
       v.setBoost(p.boostFx, this.time + c.place);
     }
     void dt;
+  }
+
+  setCameraZoom(level: CameraZoom, instant = false) {
+    this.chase.setZoom(level, instant);
   }
 
   private updateAttractCamera(cam: PerspectiveCamera, dt: number, t: number) {
