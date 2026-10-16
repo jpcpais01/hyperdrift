@@ -8,6 +8,12 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 19:00 UTC',
     entries: [
+      'Brand-new menus with a console feel. The game opens on a title screen, then the home shows your modes as big tiles over the live race: the selected one grows, glows and fills the screen with its name, details, your best lap and a big play button. Settings (sound, controls, resolution, updates, keyboard map) and patch notes now slide in as side panels, pause is a sleek side menu, and the results board counts in driver by driver with a gold finish for wins. Plug in a gamepad or use the arrows: every menu can be driven with the d-pad, A/✕ to pick, B/○ to go back and LB/RB (Q/E) to flip garage tabs, with button hints on screen.',
+    ],
+  },
+  {
+    hour: '2026-10-16 19:00 UTC',
+    entries: [
       'Nitro jets are now real volumetric fire: each exhaust shoots a turbulent stream of gas that pours out of the nozzle, with a white-hot core, glowing shock diamonds and a blue-to-violet plume that tears apart at the tail, and it looks solid from any angle. Plain boosts burn orange and lift-off pops spit fireballs.',
       'Online multiplayer! Tap MULTIJOGADOR, create a room and share its 4-digit code (or the Convidar invite link) with up to 3 friends, who punch it in on the built-in number pad, no phone keyboard needed. Empty seats can be filled with AI rivals, everyone starts on the same countdown, rivals carry floating name tags, and the results board updates live as each driver crosses the line.',
       "Car bodies redesigned from the ground up: each body now has its own silhouette, with fenders rising above a sunken hood, muscular rear haunches, a waist along the doors and a stance that sits lower and wider. The GT gets fender gills, the Hyper Cunha deep flank intakes and engine-cover louvres. Every lamp, grille, intake and vent is now moulded onto the curve of the body instead of sitting on top of it, with new LED, projector and hooked headlight designs, wrap-around and C-shaped tail lights, mesh intakes, chrome bezels, dark arch liners, bigger wheels and a smooth power-dome hood. Any mix of parts still fits.",
