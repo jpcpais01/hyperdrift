@@ -1,4 +1,4 @@
-import { Color, PerspectiveCamera, Scene, Vector3 } from 'three';
+import { Color, PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
 import { Cockpit } from '../car/cockpit';
 import { isTouch } from '../core/fullscreen';
@@ -20,6 +20,8 @@ import { collideCars, type CarContact } from './carCollision';
 import { CarPhysics, NITRO_PICKUP, type DriveInput } from './carPhysics';
 import { ChaseCamera, type CameraZoom } from './chaseCamera';
 import { GhostPlayer, GhostRecorder, type GhostLap } from './ghost';
+import { applyCar, packCar, unpackCar, type CarSnapshot } from '../net/carState';
+import type { Room } from '../net/room';
 
 /** The static race world (built once, reused by every race and by the menu backdrop). */
 export class RaceWorld {
@@ -49,6 +51,10 @@ export interface RaceEntry {
   bestLap: number | null;
   place: number;
   color: string;
+  /** online: still on track (shown live on the results board) */
+  racing?: string;
+  /** online: a person, not an AI */
+  human?: boolean;
 }
 
 export interface RaceResult {
@@ -57,9 +63,34 @@ export interface RaceResult {
   lapTimes: number[];
   bestLap: number | null;
   newRecord: boolean;
+  online?: boolean;
+}
+
+/** One grid slot of an online race, as the host sent it. */
+export interface NetGridEntry {
+  id: string;
+  name: string;
+  build: CarBuild;
+  ai: boolean;
+  skill: number;
+  seed: number;
+}
+
+/** What the host's "go" carries for a race session. */
+export interface RacePayload {
+  grid: NetGridEntry[];
+}
+
+/** An online race: the room, the grid and when the lights go green (local clock, ms). */
+export interface NetRace {
+  room: Room;
+  grid: NetGridEntry[];
+  startAt: number;
 }
 
 interface RaceCar {
+  /** online id (player id, or 'ai0'…) */
+  id: string;
   name: string;
   build: CarBuild;
   stats: CarStats;
@@ -80,6 +111,19 @@ interface RaceCar {
   wrongWay: number;
   /** engine voice id when this car is heard (player and rivals) */
   voice: string | null;
+  /** online: simulated here but steered by someone else's snapshots */
+  remote: boolean;
+  human: boolean;
+  /** online: this machine sends this car's state (my car; the AI on the host) */
+  owned: boolean;
+  lastRt: number;
+  lastHeard: number;
+  netBest: number | null;
+  /** visual smoothing after a snapshot correction, decays to zero */
+  netOffset: Vector3;
+  netQuat: Quaternion;
+  gone: boolean;
+  tag: HTMLElement | null;
 }
 
 export const LAPS = 3;
@@ -114,6 +158,13 @@ export class Race {
   private done = false;
   private fxTime = 0;
   paused = false;
+  /** online: the race keeps running but I'm only watching (lobby backdrop, pause menu) */
+  private spectate = false;
+  /** online: my car coasts (pause menu open, the race goes on for everybody else) */
+  inputLocked = false;
+  private sendTimer = 0;
+  private snap: CarSnapshot | null = null;
+  private tags: HTMLElement | null = null;
   onFinish: ((r: RaceResult) => void) | null = null;
 
   constructor(
@@ -123,19 +174,31 @@ export class Race {
     private input: Input | null,
     private hud: Hud | null,
     ghost: GhostLap | null = null,
+    readonly net: NetRace | null = null,
   ) {
     const track = world.track;
     this.ghostBest = ghost;
-    this.countdown = mode === 'attract' ? 0 : 3.6;
+    this.countdown = mode === 'attract' ? 0 : net ? Math.max(0.7, (net.startAt - performance.now()) / 1000) : 3.6;
     world.view.resetPickups();
     world.particles.clear();
 
-    const grid: { build: CarBuild; name: string; ai: boolean; skill: number; seed: number }[] = [];
-    if (mode === 'race' || mode === 'attract') {
-      AI_NAMES.forEach((name, i) => grid.push({ build: randomBuild(AI_SEEDS[i] + (mode === 'attract' ? 100 : 0)), name, ai: true, skill: AI_SKILL[i], seed: AI_SEEDS[i] }));
+    const grid: { id: string; build: CarBuild; name: string; ai: boolean; skill: number; seed: number; remote: boolean; human: boolean }[] = [];
+    if (net) {
+      // online: the host decided the grid; my car is mine, the AI belongs to the host, the rest arrive over the wire
+      for (const g of net.grid) {
+        const mine = g.id === net.room.myId;
+        const remote = !mine && !(g.ai && net.room.isHost);
+        grid.push({ ...g, ai: g.ai && !remote, remote, human: !g.ai });
+      }
+    } else {
+      if (mode === 'race' || mode === 'attract') {
+        AI_NAMES.forEach((name, i) =>
+          grid.push({ id: `ai${i}`, build: randomBuild(AI_SEEDS[i] + (mode === 'attract' ? 100 : 0)), name, ai: true, skill: AI_SKILL[i], seed: AI_SEEDS[i], remote: false, human: false }),
+        );
+      }
+      if (mode === 'attract') grid.push({ id: 'ai3', build: randomBuild(7), name: 'ZEN', ai: true, skill: 0.97, seed: 3, remote: false, human: false });
+      else if (playerBuild) grid.push({ id: 'me', build: playerBuild, name: 'TU', ai: false, skill: 1, seed: 0, remote: false, human: true });
     }
-    if (mode === 'attract') grid.push({ build: randomBuild(7), name: 'ZEN', ai: true, skill: 0.97, seed: 3 });
-    else if (playerBuild) grid.push({ build: playerBuild, name: 'TU', ai: false, skill: 1, seed: 0 });
 
     // dev helpers: ?start=<metres> places the grid elsewhere, ?autopilot lets the AI drive the player car
     const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
@@ -154,14 +217,16 @@ export class Race {
       physics.hitbox = visual.hitbox;
       world.sky.castShadows(visual.root);
       world.scene.add(visual.root);
+      const isPlayer = net ? g.id === net.room.myId : !g.ai;
       const car: RaceCar = {
+        id: g.id,
         name: g.name,
         build: g.build,
         stats,
         physics,
         visual,
-        ai: g.ai || autopilot ? new AiDriver(track, g.ai ? g.skill : 1, g.seed) : null,
-        isPlayer: !g.ai,
+        ai: !g.remote && (g.ai || (autopilot && isPlayer)) ? new AiDriver(track, g.ai ? g.skill : 1, g.seed) : null,
+        isPlayer,
         lap: 0,
         passedHalf: false,
         lapStart: 0,
@@ -173,7 +238,17 @@ export class Race {
         padCooldown: 0,
         lastInput: { throttle: 0, brake: 0, steer: 0 },
         wrongWay: 0,
-        voice: mode === 'attract' ? null : g.ai ? `rival${i}` : 'player',
+        voice: mode === 'attract' ? null : isPlayer ? 'player' : `rival${i}`,
+        remote: g.remote,
+        human: g.human,
+        owned: !!net && !g.remote,
+        lastRt: -Infinity,
+        lastHeard: performance.now(),
+        netBest: null,
+        netOffset: new Vector3(),
+        netQuat: new Quaternion(),
+        gone: false,
+        tag: null,
       };
       this.cars.push(car);
       this.physicsList.push(physics);
@@ -193,11 +268,98 @@ export class Race {
       hud?.show(true, mode === 'timetrial' ? 'timetrial' : 'race');
     }
     this.attractTarget = 0;
+
+    if (net) {
+      net.room.onState = (id, d) => this.onNetState(id, d);
+      // floating call signs over the other players' cars
+      if (hud) {
+        this.tags = document.createElement('div');
+        this.tags.className = 'name-tags';
+        hud.el.appendChild(this.tags);
+        for (const c of this.cars) {
+          if (c.isPlayer) continue;
+          c.tag = document.createElement('div');
+          c.tag.className = `name-tag${c.human ? ' human' : ''}`;
+          c.tag.innerHTML = `<i style="background:${c.color}"></i><span></span>`;
+          c.tag.querySelector('span')!.textContent = c.name;
+          this.tags.appendChild(c.tag);
+        }
+      }
+    }
+  }
+
+  /** A snapshot of somebody else's car: jump the simulation there, keep the picture smooth. */
+  private onNetState(id: string, d: unknown) {
+    const c = this.cars.find((x) => x.id === id);
+    if (!c || !c.remote || c.gone) return;
+    const s = unpackCar(d, this.snap ?? undefined);
+    if (!s) return;
+    this.snap = s;
+    if (s.rt <= c.lastRt) return; // late, out-of-order packet
+    c.lastRt = s.rt;
+    c.lastHeard = performance.now();
+    const p = c.physics;
+    // where the car is drawn right now
+    const seenPos = TMP.copy(p.pos).add(c.netOffset);
+    const seenQuat = TQ.copy(c.netQuat).multiply(p.quat);
+    applyCar(p, s, this.world.track.samples.length);
+    c.lastInput = s.input;
+    c.lap = s.lap;
+    c.finished = s.finished;
+    c.finishTime = s.finishTime;
+    c.netBest = s.bestLap;
+    // the snapshot is a few ms old: replay that bit with the inputs it carried
+    if (this.countdown <= 0) {
+      const lag = Math.max(0, Math.min(0.25, this.time - s.rt));
+      const steps = Math.round(lag / FIXED);
+      for (let k = 0; k < steps; k++) p.step(FIXED, s.input);
+      p.events = p.events.filter((e) => e.type === 'nitro' || e.type === 'pop');
+    }
+    c.netOffset.copy(seenPos).sub(p.pos);
+    if (c.netOffset.lengthSq() > 7 * 7) {
+      // a respawn or a big hiccup: no point sliding across the map
+      c.netOffset.set(0, 0, 0);
+      c.netQuat.identity();
+    } else {
+      c.netQuat.copy(seenQuat).multiply(TQ2.copy(p.quat).invert());
+    }
+  }
+
+  /** Online: someone left the room. Their car fades off the track. */
+  dropCar(id: string) {
+    const c = this.cars.find((x) => x.id === id);
+    if (!c || c.isPlayer || c.gone) return;
+    c.gone = true;
+    c.visual.root.visible = false;
+    c.tag?.remove();
+    this.physicsList = this.physicsList.filter((p) => p !== c.physics);
+    if (c.voice) audio.stopVoice(c.voice);
+    if (this.player) this.hud?.message(`${c.name} SAIU`, 1.6);
+  }
+
+  /** Online: keep the race running behind the lobby, watching from cinematic cameras. */
+  setSpectate(v: boolean) {
+    if (this.spectate === v) return;
+    this.spectate = v;
+    this.hud?.show(!v, 'race');
+    if (v) {
+      audio.stopEngine();
+      for (const c of this.cars) if (c.voice && !c.isPlayer) audio.stopVoice(c.voice);
+      this.attractCam = 0;
+    }
+  }
+
+  get spectating() {
+    return this.spectate;
+  }
+
+  private get live() {
+    return this.cars.filter((c) => !c.gone);
   }
 
   private startAudio() {
     for (const c of this.cars) {
-      if (!c.voice) continue;
+      if (!c.voice || c.gone) continue;
       const profile = engineProfile(c.build);
       if (c.isPlayer) audio.startEngine(profile);
       else audio.startVoice(c.voice, profile, { full: false, spatial: true });
@@ -226,9 +388,10 @@ export class Race {
 
     // countdown
     if (!racing) {
-      this.countdown -= dt;
+      if (this.net) this.countdown = (this.net.startAt - performance.now()) / 1000;
+      else this.countdown -= dt;
       const c = Math.ceil(this.countdown - 0.6);
-      if (c !== this.lastCount && c <= 3) {
+      if (c !== this.lastCount && c <= 3 && !this.spectate) {
         this.lastCount = c;
         if (c > 0) {
           this.hud?.setCountdown(String(c));
@@ -248,23 +411,27 @@ export class Race {
     }
 
     // inputs
-    const playerInput = this.input && this.player && racing && !this.player.finished ? this.input.read(dt) : { throttle: 0, brake: 0, steer: 0 };
+    const driving = this.input && this.player && racing && !this.player.finished && !this.spectate && !this.inputLocked;
+    const playerInput = driving ? this.input!.read(dt) : { throttle: 0, brake: this.player && (this.spectate || this.inputLocked) && racing ? 0.4 : 0, steer: 0 };
     const physicsList = this.physicsList;
     this.bumpCooldown -= dt;
     this.scrapeCooldown -= dt;
-    const leader = this.player ? this.progress(this.player) : 0;
+    // AI rubber band: measured against the best human
+    let leader = this.player ? this.progress(this.player) : 0;
+    if (this.net) for (const c of this.cars) if (c.human && !c.gone) leader = Math.max(leader, this.progress(c));
     for (const c of this.cars) {
+      if (c.remote) continue; // steered by its owner's snapshots
       if (!racing) {
         c.lastInput = { throttle: 0, brake: 0, steer: 0 };
         // engine rev during countdown for the player
-        if (c.isPlayer && this.input) {
+        if (c.isPlayer && this.input && !this.spectate) {
           const i = this.input.read(dt);
           c.physics.rpm += ((i.throttle ? 0.85 : 0.15) - c.physics.rpm) * (1 - Math.exp(-6 * dt));
         }
         continue;
       }
       if (c.ai) {
-        if (this.player && this.mode === 'race') {
+        if (this.player && this.mode === 'race' && !c.finished) {
           const gap = leader - this.progress(c);
           c.ai.pace = 1 + Math.max(-0.07, Math.min(0.09, gap / 500));
         }
@@ -279,7 +446,7 @@ export class Race {
       this.acc += Math.min(dt, 0.1);
       while (this.acc >= FIXED) {
         this.acc -= FIXED;
-        for (const c of this.cars) c.physics.step(FIXED, c.lastInput);
+        for (const c of this.cars) if (!c.gone) c.physics.step(FIXED, c.lastInput);
         this.collide();
       }
     }
@@ -290,13 +457,16 @@ export class Race {
 
     // game logic per car
     for (const c of this.cars) {
+      if (c.gone) continue;
       this.updateCarLogic(c, dt, racing);
       this.handleEvents(c);
     }
 
     // standings
-    const order = [...this.cars].sort((a, b) => this.progress(b) - this.progress(a));
+    const order = this.live.sort((a, b) => this.progress(b) - this.progress(a));
     order.forEach((c, i) => (c.place = i + 1));
+
+    if (this.net) this.netSend(dt);
 
     // ghost
     if (this.ghostPlayer && this.ghostVisual && this.player) {
@@ -312,8 +482,8 @@ export class Race {
 
     // camera
     const t = performance.now() / 1000;
-    const cockpit = this.player && this.chase.inCockpit ? this.cockpit : null;
-    if (this.mode === 'attract') this.updateAttractCamera(camera, dt, t);
+    const cockpit = this.player && !this.spectate && this.chase.inCockpit ? this.cockpit : null;
+    if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
     else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
     renderer.setOverlay(cockpit ? cockpit.scene : null);
@@ -324,7 +494,8 @@ export class Race {
     cockpit?.renderMirror(renderer.gl, this.world.scene);
 
     // post fx + audio + hud
-    if (this.player) {
+    this.updateTags(camera);
+    if (this.player && !this.spectate) {
       if (audio.ctx && !audio.hasVoice('player')) this.startAudio();
       const p = this.player.physics;
       const speedK = Math.max(0, (p.speed - 45) / 50);
@@ -337,9 +508,44 @@ export class Race {
 
     // finish
     if (this.player && this.player.finished && this.finishedAt < 0) this.finishedAt = this.time;
-    if (this.finishedAt >= 0 && !this.done && this.time - this.finishedAt > 2.5) {
+    if (this.finishedAt >= 0 && !this.done && this.time - this.finishedAt > 2.5 && !this.spectate) {
       this.done = true;
       this.onFinish?.(this.result());
+    }
+  }
+
+  /** Online: stream the cars this machine owns, 20 times a second. */
+  private netSend(dt: number) {
+    const net = this.net!;
+    this.sendTimer -= dt;
+    if (this.sendTimer > 0) return;
+    this.sendTimer = 0.05;
+    for (const c of this.cars) {
+      if (!c.owned || c.gone) continue;
+      const best = c.lapTimes.length ? Math.min(...c.lapTimes) : null;
+      net.room.sendState(c.id, packCar(c.physics, c.lastInput, { rt: this.countdown > 0 ? 0 : this.time, lap: c.lap, finished: c.finished, finishTime: c.finishTime, bestLap: best }));
+    }
+  }
+
+  private updateTags(camera: PerspectiveCamera) {
+    if (!this.tags) return;
+    const off = this.spectate || !!this.player?.finished;
+    this.tags.classList.toggle('hidden', off);
+    if (off) return;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    for (const c of this.cars) {
+      if (!c.tag) continue;
+      const v = c.visual.root;
+      const p = TMP.copy(c.physics.up).multiplyScalar(2.1).add(v.position);
+      const dist = p.distanceTo(camera.position);
+      p.project(camera);
+      const show = !c.gone && p.z < 1 && dist < 160 && Math.abs(p.x) < 1.1 && Math.abs(p.y) < 1.1;
+      c.tag.style.opacity = show ? String(Math.max(0, Math.min(1, (160 - dist) / 60))) : '0';
+      if (!show) continue;
+      const sc = Math.max(0.6, Math.min(1, 30 / dist + 0.45));
+      c.tag.style.zIndex = String(1000 - Math.round(dist));
+      c.tag.style.transform = `translate(${((p.x + 1) / 2) * w}px, ${((1 - p.y) / 2) * h}px) translate(-50%, -100%) scale(${sc.toFixed(3)})`;
     }
   }
 
@@ -367,7 +573,7 @@ export class Race {
     // rivals: distance, stereo position and Doppler from the camera
     const right = TMP3.set(1, 0, 0).applyQuaternion(camera.quaternion);
     for (const c of this.cars) {
-      if (c.isPlayer || !c.voice) continue;
+      if (c.isPlayer || !c.voice || c.gone) continue;
       const q = c.physics;
       const to = TMP.copy(q.pos).sub(camera.position);
       const dist = to.length();
@@ -389,8 +595,8 @@ export class Race {
     const L = track.length;
     const s = p.trackS;
 
-    // lap counting: crossing s=0 forwards
-    if (racing) {
+    // lap counting: crossing s=0 forwards (remote cars report their own)
+    if (racing && !c.remote) {
       if (s > L * 0.4 && s < L * 0.6) c.passedHalf = true;
       const prev = (c as RaceCar & { prevS?: number }).prevS ?? s;
       (c as RaceCar & { prevS?: number }).prevS = s;
@@ -408,7 +614,8 @@ export class Race {
           c.finished = true;
           c.finishTime = this.time;
           if (c.isPlayer) {
-            this.hud?.message(c.place === 1 || this.mode === 'timetrial' ? 'META!' : `${c.place}º LUGAR`, 3, 'big');
+            const place = this.net ? 1 + this.live.filter((o) => o !== c && o.finished && o.finishTime <= c.finishTime).length : c.place;
+            this.hud?.message(place === 1 || this.mode === 'timetrial' ? 'META!' : `${place}º LUGAR`, 3, 'big');
             audio.lap();
           }
         } else if (c.isPlayer && c.lap > 1) {
@@ -607,11 +814,19 @@ export class Race {
   }
 
   private updateVisuals(dt: number) {
+    const ease = 1 - Math.exp(-9 * dt);
     for (const c of this.cars) {
+      if (c.gone) continue;
       const p = c.physics;
       const v = c.visual;
       v.root.position.copy(p.pos);
       v.root.quaternion.copy(p.quat);
+      if (c.remote) {
+        c.netOffset.multiplyScalar(1 - ease);
+        c.netQuat.slerp(IDENTITY, ease);
+        v.root.position.add(c.netOffset);
+        v.root.quaternion.premultiply(c.netQuat);
+      }
       v.body.rotation.set(p.pitch, 0, p.roll);
       v.body.position.y = p.heave * 0.5;
       const counter = p.drifting ? p.driftDir * 0.35 : 0;
@@ -652,6 +867,7 @@ export class Race {
     if (this.attractCam <= 0) {
       this.attractCam = 7;
       this.attractTarget = (this.attractTarget + 1) % this.cars.length;
+      while (this.cars[this.attractTarget].gone && this.live.length) this.attractTarget = (this.attractTarget + 1) % this.cars.length;
       this.chase.snap();
     }
     const car = this.cars[this.attractTarget].physics;
@@ -687,14 +903,14 @@ export class Race {
         nitroActive: p.nitroActive,
         drift: p.drifting ? Math.min(1, p.driftTime / 3.2) : 0,
         place: this.player.place,
-        total: this.cars.length,
+        total: this.live.length,
         lap: this.player.lap,
         laps: LAPS,
         time: this.time,
         lapTime: this.time - this.player.lapStart,
         bestLap: best,
         ghostDelta,
-        dots: this.cars.map((c) => ({ x: c.physics.pos.x, z: c.physics.pos.z, color: c.color, player: c.isPlayer })),
+        dots: this.live.map((c) => ({ x: c.physics.pos.x, z: c.physics.pos.z, color: c.color, player: c.isPlayer })),
         wrongWay: this.player.wrongWay > 1.2,
       },
       dt,
@@ -703,8 +919,22 @@ export class Race {
 
   result(): RaceResult {
     const L = this.world.track.length;
-    const entries: RaceEntry[] = this.cars.map((c) => {
+    const entries: RaceEntry[] = this.live.map((c) => {
       let time: number | null = c.finished ? c.finishTime : null;
+      if (this.net) {
+        // online: nobody's time is guessed; who's still out there shows live
+        const best = c.remote ? c.netBest : c.lapTimes.length ? Math.min(...c.lapTimes) : null;
+        return {
+          name: c.name,
+          isPlayer: c.isPlayer,
+          time,
+          bestLap: best,
+          place: 0,
+          color: c.color,
+          human: c.human,
+          racing: c.finished ? undefined : `VOLTA ${Math.max(1, Math.min(LAPS, c.lap))}/${LAPS}`,
+        };
+      }
       if (time === null && c.lap >= 1) {
         // estimate the remaining distance at the car's average pace
         const done = (c.lap - 1) * L + c.physics.trackS;
@@ -720,7 +950,10 @@ export class Race {
         color: c.color,
       };
     });
-    entries.sort((a, b) => (a.time ?? 1e9) - (b.time ?? 1e9));
+    if (this.net) {
+      const prog = new Map(this.live.map((c) => [c.name, this.progress(c)]));
+      entries.sort((a, b) => (a.time ?? 1e9) - (b.time ?? 1e9) || (prog.get(b.name) ?? 0) - (prog.get(a.name) ?? 0));
+    } else entries.sort((a, b) => (a.time ?? 1e9) - (b.time ?? 1e9));
     entries.forEach((e, i) => (e.place = i + 1));
     const lapTimes = this.player?.lapTimes ?? [];
     return {
@@ -729,11 +962,15 @@ export class Race {
       lapTimes,
       bestLap: lapTimes.length ? Math.min(...lapTimes) : null,
       newRecord: this.newRecord,
+      online: !!this.net,
     };
   }
 
   dispose() {
+    if (this.net && this.net.room.onState) this.net.room.onState = null;
+    this.tags?.remove();
     for (const c of this.cars) {
+      if (c.voice && !c.isPlayer) audio.stopVoice(c.voice);
       this.world.scene.remove(c.visual.root);
       c.visual.dispose();
     }
@@ -752,6 +989,9 @@ export class Race {
 const TMP = new Vector3();
 const TMP2 = new Vector3();
 const TMP3 = new Vector3();
+const TQ = new Quaternion();
+const TQ2 = new Quaternion();
+const IDENTITY = new Quaternion();
 const SMOKE = new Color(0.9, 0.9, 0.95);
 const SPARK = new Color(1.6, 0.9, 0.3);
 const SPARK_HOT = new Color(0.6, 1.6, 3.0);
