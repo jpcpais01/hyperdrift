@@ -7,6 +7,7 @@ import { Input } from './core/input';
 import { Renderer } from './core/renderer';
 import { Race, RaceWorld, type RaceMode } from './game/race';
 import { storage } from './storage';
+import { FpsCounter } from './ui/fps';
 import { Hud } from './ui/hud';
 import { GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
 import { GarageScene } from './world/garageScene';
@@ -33,6 +34,7 @@ class App {
   private settings = storage.loadSettings();
   private last = performance.now();
   private time = 0;
+  private fps = new FpsCounter();
 
   constructor() {
     const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -179,6 +181,7 @@ class App {
       this.race.update(needRotate ? 0 : dt, this.renderer);
     }
     this.renderer.render(dt);
+    this.fps.tick(now);
     requestAnimationFrame(this.frame);
   };
 }
