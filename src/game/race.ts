@@ -487,6 +487,7 @@ export class Race {
     // camera
     const t = performance.now() / 1000;
     const cockpit = this.player && !this.spectate && this.chase.inCockpit ? this.cockpit : null;
+    this.chase.orbitEnabled = this.mode !== 'attract' && !this.spectate;
     if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
     else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);

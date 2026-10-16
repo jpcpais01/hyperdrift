@@ -8,6 +8,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      'Look around while you drive: swipe anywhere on the open screen (or drag with the mouse) to swing the camera around your car, even all the way to the front to watch the pack behind you. In the cockpit the same swipe turns your head to look over a shoulder or out the side window. Let go and the camera glides back behind the car; double-tap to snap it back straight away. The touch buttons are never affected.',
       'The garage has been rebuilt to be much clearer. Pick a section (Exterior, Interior or Desempenho), then a category from a list that shows what is fitted on each part, with an icon and a line on what it changes. Opening a category lists its parts with a description, an EQUIPADO tag on the one you have, and for performance parts the exact stat changes (for example ▲ Aderência +2.8) before you even try them. Paints are a grid of colour chips, the camera swings to whatever category you highlight, and a new class rating (D to S, with a score) sums up your car and shows how much each part would raise or lower it.',
     ],
   },
