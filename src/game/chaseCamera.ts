@@ -8,9 +8,9 @@ export const CAMERA_ZOOM_LABELS = ['PERTO', 'MÉDIA', 'LONGE', 'COCKPIT'] as con
 
 /** Third-person framings: near is tight and fast-feeling, far shows more of the road ahead. */
 const ZOOMS = [
-  { dist: 4.7, height: 1.55, look: 0.95, ahead: 2.4, fov: 66 },
-  { dist: 6.4, height: 2.15, look: 1.05, ahead: 3, fov: 62 },
-  { dist: 9.2, height: 3.05, look: 1.3, ahead: 4.2, fov: 58 },
+  { dist: 4.7, height: 2.05, look: 0.65, ahead: 2, fov: 66 },
+  { dist: 6.4, height: 2.75, look: 0.75, ahead: 2.6, fov: 62 },
+  { dist: 9.2, height: 3.75, look: 0.9, ahead: 3.4, fov: 58 },
 ];
 
 /** Spring chase camera: follows the car's up vector through loops, widens FOV with speed and boost. */
