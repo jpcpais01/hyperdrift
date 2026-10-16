@@ -11,11 +11,6 @@
  *  - panel lines: door, hood and bumper shut lines and a fuel filler, drawn
  *    as thin anti-aliased dark lines instead of geometry.
  */
-import { SKELETON } from './skeleton';
-import { ARCH_RADIUS } from './geometry';
-
-const f = (n: number) => n.toFixed(4);
-
 export const PAINT_GLSL = /* glsl */ `
 uniform vec3 uZoneCol[8];
 uniform vec3 uZoneCol2[8];
@@ -24,6 +19,10 @@ uniform vec3 uAccent;
 uniform float uVinyl;
 uniform vec4 uHood;
 uniform vec3 uDoor;
+uniform vec3 uDoorY;
+uniform vec2 uEnds;
+uniform vec4 uArchF;
+uniform vec4 uArchR;
 uniform float uNumber;
 
 float band(float d, float w) { float aa = fwidth(d) * 1.2 + 1e-4; return 1.0 - smoothstep(w - aa, w + aa, d); }
@@ -38,11 +37,12 @@ float vnoise(vec2 p) {
 
 int shellZone(vec3 p, vec3 n) {
   // inside the wheel arches: the well walls and the arch's inner return
-  float r = min(length(vec2(p.y - ${f(SKELETON.wheelY)}, p.z - ${f(SKELETON.frontAxleZ)})), length(vec2(p.y - ${f(SKELETON.wheelY)}, p.z - ${f(SKELETON.rearAxleZ)})));
-  if (r < ${f(ARCH_RADIUS - 0.004)} && abs(p.x) > 0.3) return 7;
+  float rf = length(vec2(p.y - uArchF.x, p.z - uArchF.y)) - (uArchF.z - 0.004);
+  float rr = length(vec2(p.y - uArchR.x, p.z - uArchR.y)) - (uArchR.z - 0.004);
+  if (min(rf, rr) < 0.0 && abs(p.x) > uArchF.w - 0.2) return 7;
   if (p.z > uHood.x && p.z < uHood.y && abs(p.x) < uHood.z && p.y > uHood.w && n.y > 0.0) return 3;
-  if (p.z > 1.78) return 1;
-  if (p.z < -1.78) return 2;
+  if (p.z > uEnds.x) return 1;
+  if (p.z < uEnds.y) return 2;
   return 0;
 }
 
@@ -53,11 +53,11 @@ float panelLines(vec3 p, vec3 n) {
   float inHoodX = step(ax, uHood.z);
   float inHoodZ = step(uHood.x, p.z) * step(p.z, uHood.y);
   float w = 0.0032;
-  float l = side * step(0.3, p.y) * step(p.y, 0.92) * max(band(abs(p.z - uDoor.x), w), band(abs(p.z - uDoor.y), w));
+  float l = side * step(uDoorY.x, p.y) * step(p.y, uDoorY.y) * max(band(abs(p.z - uDoor.x), w), band(abs(p.z - uDoor.y), w));
   l = max(l, top * inHoodZ * band(abs(ax - uHood.z), w));
   l = max(l, top * inHoodX * max(band(abs(p.z - uHood.y), w), band(abs(p.z - uHood.x - 0.01), w)));
-  l = max(l, band(abs(abs(p.z) - 1.78), w) * (1.0 - top * inHoodX * inHoodZ));
-  if (p.x > 0.0) l = max(l, side * band(abs(length(vec2(p.z - uDoor.z, p.y - 0.72)) - 0.05), w));
+  l = max(l, max(band(abs(p.z - uEnds.x), w), band(abs(p.z - uEnds.y), w)) * (1.0 - top * inHoodX * inHoodZ));
+  if (p.x > 0.0) l = max(l, side * band(abs(length(vec2(p.z - uDoor.z, p.y - uDoorY.z)) - 0.05), w));
   return clamp(l, 0.0, 1.0);
 }
 
@@ -226,7 +226,8 @@ void paintSurface(inout vec3 col, inout float metal, inout float rough, inout fl
   }
   col = base;
   if (uVinyl > 0.5 && !carbon) {
-    vec4 v = vinyl(p, n, base);
+    // vinyls are drawn on the base car: follow this body's ride height
+    vec4 v = vinyl(p - vec3(0.0, uArchR.w, 0.0), n, base);
     col = mix(col, v.rgb, v.a);
   }
   if (shell) {

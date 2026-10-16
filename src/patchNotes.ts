@@ -6,6 +6,13 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
+      "Three new car bodies with their own proportions: the compact Hot Hatch (short wheelbase, tall boxy cabin, rear wiper), the lifted Rally Raid (high ride, chunky tall-sidewall tyres, black arch cladding and roof rails) and the long, wide Protótipo (low tub between tall wheel pods, bubble canopy and a shark fin). Every body now sets its own wheelbase, track, wheel size, ride height, overhangs and roof line, so they look and sit very differently, and any mix of parts still fits.",
+      'New parts in the garage: Tubarão and Rally fronts (with a spot-lamp pod), Quadrada and Jato rears, Persianas and Bossas hoods, mud flaps, a roof spoiler and the option to run without skirts or a wing, Prato fundo, Rally and Lâminas rims, Matriz LED and pop-up headlights, and Trapezoidal and Séxtupla exhausts.',
+    ],
+  },
+  {
     hour: '2026-10-16 19:00 UTC',
     entries: [
       'Online multiplayer! Tap MULTIJOGADOR, create a room and share its 4-digit code (or the Convidar invite link) with up to 3 friends, who punch it in on the built-in number pad, no phone keyboard needed. Empty seats can be filled with AI rivals, everyone starts on the same countdown, rivals carry floating name tags, and the results board updates live as each driver crosses the line.',

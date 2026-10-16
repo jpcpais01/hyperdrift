@@ -50,7 +50,8 @@ interface Hit {
 function project(s: Surface, proj: Projector, a: number, b: number, off: number, fallbackDepth: number): Hit {
   const { o, d } = proj(a, b);
   const h = s.cast(o, d);
-  if (h) return { p: h.point.addScaledVector(h.normal, off), n: h.normal };
+  // a ray that slips past an edge can run on and hit a far part of the body (under the tail, into an arch): treat it as a miss
+  if (h && h.point.distanceTo(o) < fallbackDepth + 0.4) return { p: h.point.addScaledVector(h.normal, off), n: h.normal };
   // missed the body (outline runs past an edge): stay on the projection plane at the centre's depth
   return { p: o.clone().addScaledVector(d, fallbackDepth - off), n: d.clone().negate() };
 }

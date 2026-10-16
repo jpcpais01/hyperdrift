@@ -253,7 +253,8 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const f = cabinFrame(bodyId);
   const driverX = Math.min(0.37, f.halfW * 0.48);
   const ez = f.zRoofFront - 0.39;
-  const ey = Math.max(f.beltY + 0.1, f.roofY - 0.19);
+  // tall cabins don't seat the driver higher than a coupé does over its dash, or the gauges drop out of sight
+  const ey = Math.max(f.beltY + 0.1, Math.min(f.roofY - 0.19, f.beltY + 0.22));
   const eye = new Vector3(driverX, ey, ez);
   const dashTop = f.beltY - 0.025;
   const zFace = ez + 0.6;
@@ -263,12 +264,12 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const clusterZ = zFace - 0.01;
   const sight = ey + ((clusterY - ey) * 0.4) / (clusterZ - ez);
   const wheel = new Vector3(driverX, Math.max(ey - 0.235, sight + 0.03 - 0.17 * Math.cos(wheelTilt)), ez + 0.4);
-  const consoleY = 0.6;
+  const consoleY = f.floorY + 0.3;
   return {
     frame: f,
     eye,
     driverX,
-    floorY: 0.3,
+    floorY: f.floorY,
     dashTop,
     zFace,
     wheel,
@@ -488,8 +489,8 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
     if (future) door.glow.push(put(rb(0.006, 0.006, dlen * 0.85, 0.002), [dx - 0.034, f.beltY - 0.04, dzc]));
   } else {
     // door pull strap and a bare release cable
-    door.accent.push(put(rb(0.012, 0.025, 0.18, 0.004), [dx - 0.03, 0.66, ez + 0.32], [0.3, 0, 0]));
-    door.metal.push(rod([dx - 0.025, 0.75, ez + 0.4], [dx - 0.025, 0.72, ez + 0.6], 0.004, 6));
+    door.accent.push(put(rb(0.012, 0.025, 0.18, 0.004), [dx - 0.03, fy + 0.36, ez + 0.32], [0.3, 0, 0]));
+    door.metal.push(rod([dx - 0.025, fy + 0.45, ez + 0.4], [dx - 0.025, fy + 0.42, ez + 0.6], 0.004, 6));
   }
   for (const k of Object.keys(door) as IBucket[]) for (const g of door[k]) b[k].push(...both(g));
 
@@ -567,7 +568,7 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
     const zh = f.zRoofFront - 0.02;
     b.accent.push(rod(new Vector3(f.roofW - 0.05, f.roofAt(zh) - 0.055, zh), new Vector3(-(f.roofW - 0.05), f.roofAt(zh) - 0.055, zh), r * 0.85));
     // harness bar and the extinguisher in the passenger footwell
-    b.accent.push(rod(new Vector3(f.halfW - 0.08, 0.72, cz), new Vector3(-(f.halfW - 0.08), 0.72, cz), r * 0.9));
+    b.accent.push(rod(new Vector3(f.halfW - 0.08, fy + 0.42, cz), new Vector3(-(f.halfW - 0.08), fy + 0.42, cz), r * 0.9));
     b.red.push(rod([-L.driverX - 0.1, fy + 0.1, ez + 0.55], [-L.driverX + 0.15, fy + 0.1, ez + 0.55], 0.045, 16));
     b.chrome.push(rod([-L.driverX + 0.15, fy + 0.1, ez + 0.55], [-L.driverX + 0.2, fy + 0.1, ez + 0.55], 0.02, 10));
   }
