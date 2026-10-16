@@ -21,6 +21,7 @@ const KEY_BUILD = 'hyperdrift.build.v1';
 const KEY_GHOST = 'hyperdrift.ghost.v1';
 const KEY_SETTINGS = 'hyperdrift.settings.v1';
 const KEY_RECORDS = 'hyperdrift.records.v1';
+const KEY_CALLSIGN = 'hyperdrift.callsign.v1';
 
 function get<T>(key: string): T | null {
   try {
@@ -68,4 +69,9 @@ export const storage = {
   saveSettings: (s: Settings) => set(KEY_SETTINGS, s),
   loadRecords: () => ({ bestLap: null as number | null, bestRace: null as number | null, ...(get<{ bestLap: number | null; bestRace: number | null }>(KEY_RECORDS) ?? {}) }),
   saveRecords: (r: { bestLap: number | null; bestRace: number | null }) => set(KEY_RECORDS, r),
+  loadCallSign: (): string | null => {
+    const n = get<string>(KEY_CALLSIGN);
+    return typeof n === 'string' && n.length > 0 && n.length <= 16 ? n : null;
+  },
+  saveCallSign: (n: string) => set(KEY_CALLSIGN, n),
 };

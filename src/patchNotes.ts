@@ -8,6 +8,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 19:00 UTC',
     entries: [
+      'Online multiplayer! Tap MULTIJOGADOR, create a room and share its 4-digit code (or the Convidar invite link) with up to 3 friends, who punch it in on the built-in number pad, no phone keyboard needed. Empty seats can be filled with AI rivals, everyone starts on the same countdown, rivals carry floating name tags, and the results board updates live as each driver crosses the line.',
       "Car bodies redesigned from the ground up: each body now has its own silhouette, with fenders rising above a sunken hood, muscular rear haunches, a waist along the doors and a stance that sits lower and wider. The GT gets fender gills, the Hyper Cunha deep flank intakes and engine-cover louvres. Every lamp, grille, intake and vent is now moulded onto the curve of the body instead of sitting on top of it, with new LED, projector and hooked headlight designs, wrap-around and C-shaped tail lights, mesh intakes, chrome bezels, dark arch liners, bigger wheels and a smooth power-dome hood. Any mix of parts still fits.",
     ],
   },

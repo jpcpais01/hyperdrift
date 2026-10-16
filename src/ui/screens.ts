@@ -43,6 +43,7 @@ export class MenuScreen {
   onRace: (() => void) | null = null;
   onTimeTrial: (() => void) | null = null;
   onGarage: (() => void) | null = null;
+  onOnline: (() => void) | null = null;
   onToggleSound: (() => boolean) | null = null;
   onControls: (() => void) | null = null;
   /** Cycles the render resolution and returns the new button label. */
@@ -56,6 +57,7 @@ export class MenuScreen {
         <p class="tagline">Pistas suspensas no céu. Carros feitos peça a peça.</p>
         <nav class="menu-buttons">
           <button class="btn primary" data-a="race">Corrida <small>contra 3 rivais</small></button>
+          <button class="btn btn-online" data-a="online">Multijogador <small>sala com código para amigos</small></button>
           <button class="btn" data-a="tt">Contrarrelógio <small>contra o teu fantasma</small></button>
           <button class="btn" data-a="garage">Garagem <small>monta o teu carro</small></button>
         </nav>
@@ -92,6 +94,7 @@ export class MenuScreen {
       if (a === 'race') this.onRace?.();
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
+      if (a === 'online') this.onOnline?.();
       if (a === 'controls') this.onControls?.();
       if (a === 'res' && this.onResolution) b.textContent = this.onResolution();
       if (a === 'update') void checkAndReload();
@@ -296,6 +299,7 @@ export class ResultsScreen {
     this.el.classList.toggle('hidden', !r);
     if (!r) return;
     const player = r.entries.find((e) => e.isPlayer);
+    if (r.online) return this.showOnline(r, player);
     const title = r.mode === 'timetrial' ? (r.newRecord ? 'Novo recorde!' : 'Contrarrelógio') : player?.place === 1 ? 'Vitória!' : `${player?.place ?? '-'}º lugar`;
     const rows =
       r.mode === 'race'
@@ -320,6 +324,34 @@ export class ResultsScreen {
           <button class="btn primary" data-a="again">Outra vez</button>
           <button class="btn" data-a="garage">Garagem</button>
           <button class="btn" data-a="menu">Menu</button>
+        </div>
+      </div>`;
+  }
+
+  /** Online board: live while others are still racing, with who's a person and who's an AI. */
+  private showOnline(r: RaceResult, player: RaceResult['entries'][number] | undefined) {
+    const done = r.entries.filter((e) => !e.racing).length;
+    const title = !player || player.racing ? 'Corrida' : player.place === 1 ? 'Vitória!' : `${player.place}º lugar`;
+    const rows = r.entries
+      .map(
+        (e) =>
+          `<tr class="${e.isPlayer ? 'me' : ''}${e.racing ? ' live' : ''}"><td>${e.racing ? '' : `${e.place}º`}</td><td><i class="dot" style="background:${e.color}"></i>${esc(e.name)}${
+            e.human ? '' : ' <em class="tag-ai">IA</em>'
+          }</td><td>${e.racing ? `<span class="live-pill">${esc(e.racing)}</span>` : formatTime(e.time)}</td><td>${formatTime(e.bestLap)}</td></tr>`,
+      )
+      .join('');
+    this.el.innerHTML = `
+      <div class="results-card">
+        <h2>${esc(title)}</h2>
+        <table>
+          <thead><tr><th></th><th>Piloto</th><th>Tempo</th><th>Melhor volta</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p class="best">${done < r.entries.length ? '<span class="mp-dots"><i></i><i></i><i></i></span> Ainda há pilotos em pista' : 'Todos cortaram a meta'}</p>
+        <div class="row">
+          <button class="btn primary" data-a="again">Voltar à sala</button>
+          <button class="btn" data-a="garage">Garagem</button>
+          <button class="btn" data-a="menu">Sair da sala</button>
         </div>
       </div>`;
   }
@@ -363,6 +395,13 @@ export class PauseScreen {
 
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
+  }
+
+  /** Online there's no restarting the race for everybody; "quit" goes back to the room. */
+  setOnline(v: boolean) {
+    this.el.querySelector<HTMLElement>('[data-a="restart"]')!.classList.toggle('hidden', v);
+    this.el.querySelector('[data-a="quit"]')!.textContent = v ? 'Voltar à sala' : 'Sair para o menu';
+    this.el.querySelector('h2')!.textContent = v ? 'Menu · a corrida continua' : 'Pausa';
   }
 
   setResolutionLabel(label: string) {
