@@ -6,6 +6,12 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
+      'The garage has been rebuilt to be much clearer. Pick a section (Exterior, Interior or Desempenho), then a category from a list that shows what is fitted on each part, with an icon and a line on what it changes. Opening a category lists its parts with a description, an EQUIPADO tag on the one you have, and for performance parts the exact stat changes (for example ▲ Aderência +2.8) before you even try them. Paints are a grid of colour chips, the camera swings to whatever category you highlight, and a new class rating (D to S, with a score) sums up your car and shows how much each part would raise or lower it.',
+    ],
+  },
+  {
     hour: '2026-10-16 19:00 UTC',
     entries: [
       'Nitro and boost glow on the road now fades out softly instead of ending in a hard line, and the jets thin out gently where they meet the road.',
