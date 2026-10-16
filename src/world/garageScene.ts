@@ -11,8 +11,12 @@ import {
   Vector3,
   type PerspectiveCamera,
 } from 'three';
+import { engineProfile } from '../audio/engineProfile';
 import { buildCar, type CarVisual } from '../car/carBuilder';
-import type { CarBuild } from '../car/parts';
+import type { CarBuild, Slot } from '../car/parts';
+import { computeStats } from '../car/stats';
+import { audio } from '../core/audio';
+import { Drivetrain } from '../game/drivetrain';
 import type { Sky } from './sky';
 
 function platformTexture(): CanvasTexture | null {
@@ -51,6 +55,7 @@ export class GarageScene {
   private dragging = false;
   private lastX = 0;
   private idle = 0;
+  private demo: { t: number; nitro: boolean; dt: Drivetrain; nitroFx: number; lit: boolean } | null = null;
 
   constructor(private readonly sky: Sky) {
     sky.addTo(this.scene);
@@ -83,6 +88,50 @@ export class GarageScene {
     this.turntable.add(this.car.root);
   }
 
+  /**
+   * Picking an engine, turbo, exhaust or nitro part blips the throttle so you
+   * hear (and see) what it changed: rev, lift-off pops, blow-off, nitro purge.
+   */
+  preview(build: CarBuild, slot: Slot) {
+    const nitro = slot === 'nitro';
+    if (!nitro && slot !== 'engine' && slot !== 'turbo' && slot !== 'exhaust' && slot !== 'weight') return;
+    audio.startVoice('garage', engineProfile(build), { full: true });
+    this.demo = { t: 0, nitro, dt: new Drivetrain(computeStats(build), 5), nitroFx: 0, lit: false };
+  }
+
+  stopPreview() {
+    this.demo = null;
+    audio.stopVoice('garage');
+  }
+
+  private updatePreview(dt: number, time: number) {
+    const d = this.demo;
+    if (!d) {
+      this.car?.exhaust?.update(dt, time, 0, 0);
+      return;
+    }
+    d.t += dt;
+    const t = d.t;
+    const throttle = d.nitro ? (t > 0.15 && t < 2.1 ? 1 : 0) : (t > 0.15 && t < 0.95) || (t > 1.45 && t < 1.75) ? 1 : 0;
+    const nitroOn = d.nitro && t > 0.55 && t < 2.0;
+    if (nitroOn && !d.lit) {
+      d.lit = true;
+      this.car?.exhaust?.ignite();
+      audio.nitroStart('garage');
+    }
+    d.nitroFx += ((nitroOn ? 1 : 0) - d.nitroFx) * (1 - Math.exp(-(nitroOn ? 14 : 4) * dt));
+    d.dt.step(dt, { speed: 0, topSpeed: 70, throttle, grounded: false, spin: 0 });
+    for (const e of d.dt.events) {
+      if (e.type !== 'pop') continue;
+      this.car?.exhaust?.pop(e.strength);
+      audio.pop('garage', e.strength);
+    }
+    d.dt.events.length = 0;
+    audio.updateVoice('garage', { rpm: d.dt.rpm, throttle, nitro: d.nitroFx, limiter: d.dt.limiter, cut: false, gain: t > 3.4 ? 0 : 1 }, dt);
+    this.car?.exhaust?.update(dt, time, 0, d.nitroFx);
+    if (t > 3.8) this.stopPreview();
+  }
+
   bindDrag(el: HTMLElement) {
     el.addEventListener('pointerdown', (e) => {
       this.dragging = true;
@@ -111,7 +160,7 @@ export class GarageScene {
     camera.lookAt(rx, narrow ? -0.6 : 0.55, rz);
     camera.fov = 40;
     camera.updateProjectionMatrix();
-    if (this.car) this.car.setBoost(0, time);
+    this.updatePreview(dt, time);
     sky.update(time, camera.position, -80, ORIGIN);
     this.scene.fog = null;
   }

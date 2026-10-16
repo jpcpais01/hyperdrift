@@ -1,33 +1,268 @@
+import type { EngineProfile } from '../audio/engineProfile';
+import { ENGINE_WORKLET } from '../audio/engineWorklet';
+
 /**
- * All sound is synthesised with WebAudio (no assets to download):
- * engine (oscillators + waveshaper + filter, pitch from RPM), turbo whistle,
- * boost roar, tyre screech, wind, and one-shot effects.
+ * All sound is synthesised with WebAudio (no assets to download).
+ *
+ * Engines run on the audio thread (see audio/engineWorklet.ts): a firing
+ * pulse per cylinder through tuned exhaust pipes, so the engine part, turbo,
+ * exhaust and weight all change the sound. On top of that each voice has
+ * turbo layers (spool whistle, blow-off valve or compressor flutter), nitro
+ * layers (solenoid hiss, roar, ignition blast) and overrun pops. The player
+ * also gets tyre screech (tuned per tyre part), wind and one-shot effects.
  */
-type Voice = 'v6' | 'rotary' | 'v12';
 
-const VOICES: Record<Voice, { base: number; range: number; waves: OscillatorType[]; mix: number[]; cutoff: number }> = {
-  v6: { base: 48, range: 3.2, waves: ['sawtooth', 'square', 'sawtooth'], mix: [0.5, 0.25, 0.18], cutoff: 1300 },
-  rotary: { base: 70, range: 3.8, waves: ['square', 'sawtooth', 'square'], mix: [0.38, 0.35, 0.22], cutoff: 2200 },
-  v12: { base: 40, range: 3.0, waves: ['sawtooth', 'sawtooth', 'triangle'], mix: [0.45, 0.35, 0.3], cutoff: 1700 },
-};
-
-export interface EngineParams {
+export interface VoiceParams {
+  /** revs as a fraction of the redline */
   rpm: number;
   throttle: number;
+  /** 0..1 nitro burn */
+  nitro: number;
+  limiter: boolean;
+  /** ignition cut (gear shift) */
+  cut: boolean;
+  /** output gain (distance attenuation for rivals) */
+  gain?: number;
+  /** -1..1 stereo position */
+  pan?: number;
+  /** Doppler pitch factor */
+  pitch?: number;
+}
+
+export interface EnvParams {
   speed: number; // m/s
-  boost: number; // 0..1
   slip: number; // 0..1 tyre screech
-  whistle: number;
   grounded: boolean;
 }
 
+type Ctx = AudioContext;
+
+const TYRES = {
+  street: { f: 1400, q: 6, vol: 1 },
+  slick: { f: 2150, q: 9, vol: 0.7 },
+  drift: { f: 950, q: 4, vol: 1.25 },
+} as const;
+
+/** One engine with its turbo and nitro layers. */
+class EngineVoice {
+  readonly out: GainNode;
+  private panner: StereoPannerNode | null = null;
+  private node: AudioWorkletNode | null = null;
+  private legacy: { oscs: OscillatorNode[]; filter: BiquadFilterNode; gain: GainNode } | null = null;
+  private whistle: { osc: OscillatorNode; gain: GainNode; hiss: GainNode } | null = null;
+  private nitroHiss: GainNode | null = null;
+  private nitroRoar: GainNode | null = null;
+  private sources: AudioScheduledSourceNode[] = [];
+  private spool = 0;
+  private lastThrottle = 0;
+  private stopped = false;
+  private lastNitro = 0;
+  private base = 1;
+
+  constructor(
+    private sys: AudioSystem,
+    readonly profile: EngineProfile,
+    readonly full: boolean,
+    spatial: boolean,
+  ) {
+    const ctx = sys.ctx!;
+    this.out = ctx.createGain();
+    this.base = full ? 0.62 : 1;
+    this.out.gain.value = this.base;
+    if (spatial && typeof ctx.createStereoPanner === 'function') {
+      this.panner = ctx.createStereoPanner();
+      this.out.connect(this.panner).connect(sys.bus);
+    } else {
+      this.out.connect(sys.bus);
+    }
+    void sys.worklet.then((ok) => {
+      if (this.stopped) return;
+      if (ok) this.attachWorklet();
+      else this.attachLegacy();
+    });
+    if (full) this.buildLayers();
+  }
+
+  private attachWorklet() {
+    const ctx = this.sys.ctx!;
+    try {
+      this.node = new AudioWorkletNode(ctx, 'hyperdrift-engine', {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        processorOptions: this.profile,
+      });
+      this.node.connect(this.out);
+    } catch {
+      this.attachLegacy();
+    }
+  }
+
+  /** Fallback for browsers without AudioWorklet: a few oscillators through a filter. */
+  private attachLegacy() {
+    const ctx = this.sys.ctx!;
+    const filter = ctx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = this.profile.muffler;
+    filter.Q.value = 2;
+    const gain = ctx.createGain();
+    gain.gain.value = 0;
+    const oscs = (['sawtooth', 'square', 'sawtooth'] as OscillatorType[]).map((w, i) => {
+      const o = ctx.createOscillator();
+      o.type = w;
+      const g = ctx.createGain();
+      g.gain.value = [0.5, 0.25, 0.18][i];
+      o.connect(g).connect(filter);
+      o.start();
+      return o;
+    });
+    filter.connect(gain).connect(this.out);
+    this.legacy = { oscs, filter, gain };
+  }
+
+  private buildLayers() {
+    const ctx = this.sys.ctx!;
+    const p = this.profile;
+    if (p.turbo !== 'none') {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      osc.connect(gain).connect(this.out);
+      osc.start();
+      const hiss = this.sys.noiseLoop('bandpass', p.turbo === 'twin' ? 5200 : 3600, 2.5, this.out);
+      this.sources.push(osc, hiss.src);
+      this.whistle = { osc, gain, hiss: hiss.gain };
+    }
+    const hiss = this.sys.noiseLoop('highpass', 4200, 0.7, this.out);
+    const roar = this.sys.noiseLoop('lowpass', 240, 0.8, this.out);
+    this.sources.push(hiss.src, roar.src);
+    this.nitroHiss = hiss.gain;
+    this.nitroRoar = roar.gain;
+  }
+
+  update(v: VoiceParams, dt: number) {
+    const ctx = this.sys.ctx!;
+    const t = ctx.currentTime;
+    const p = this.profile;
+    const rpmHz = Math.max(p.idleRpm * 0.85, v.rpm * p.redline);
+    const pitch = v.pitch ?? 1;
+    const thr = v.cut ? 0 : v.throttle;
+    if (this.node) {
+      const P = this.node.parameters;
+      P.get('rpm')!.setTargetAtTime(rpmHz, t, 0.012);
+      P.get('throttle')!.setTargetAtTime(thr, t, 0.02);
+      P.get('nitro')!.setTargetAtTime(v.nitro, t, 0.05);
+      P.get('cut')!.setValueAtTime(v.cut ? 1 : 0, t);
+      P.get('limiter')!.setValueAtTime(v.limiter ? 1 : 0, t);
+      P.get('pitch')!.setTargetAtTime(pitch, t, 0.05);
+      // the worklet sleeps when nobody can hear it; distance is applied on `out`
+      P.get('gain')!.setTargetAtTime((v.gain ?? 1) > 1e-3 ? 1 : 0, t, 0.04);
+    } else if (this.legacy) {
+      const f = (rpmHz / 120) * p.fires.length * pitch;
+      const ratios = [1, 0.5, 2.01];
+      this.legacy.oscs.forEach((o, i) => o.frequency.setTargetAtTime(f * ratios[i], t, 0.02));
+      this.legacy.filter.frequency.setTargetAtTime(p.muffler * (0.5 + thr * 0.7 + v.rpm * 0.6), t, 0.05);
+      this.legacy.gain.gain.setTargetAtTime(0.16 + thr * 0.12 + v.nitro * 0.06, t, 0.05);
+    }
+    this.out.gain.setTargetAtTime(this.base * (v.gain ?? 1), t, 0.04);
+    if (this.panner) this.panner.pan.setTargetAtTime(Math.max(-1, Math.min(1, v.pan ?? 0)), t, 0.05);
+
+    if (this.whistle) {
+      // turbo spool: lags the throttle, builds with revs, dumps on lift-off
+      const twin = p.turbo === 'twin';
+      const target = thr * Math.max(0, Math.min(1, (v.rpm - 0.28) / 0.55));
+      const rate = target > this.spool ? (twin ? 2.8 : 1.3) : 3;
+      this.spool += (target - this.spool) * (1 - Math.exp(-rate * dt));
+      const s = this.spool;
+      this.whistle.osc.frequency.setTargetAtTime((twin ? 2600 : 1700) + s * (twin ? 5200 : 4300) + v.rpm * 600, t, 0.05);
+      this.whistle.gain.gain.setTargetAtTime(s * s * (0.3 + 0.7 * thr) * (twin ? 0.03 : 0.045), t, 0.05);
+      this.whistle.hiss.gain.setTargetAtTime(s * thr * 0.05, t, 0.06);
+      if (this.lastThrottle > 0.5 && v.throttle < 0.2 && s > 0.35) this.blowOff(s);
+    }
+    this.lastThrottle = v.throttle;
+
+    if (this.nitroHiss && this.nitroRoar) {
+      const k = p.nitro === 'burst' ? 1.3 : p.nitro === 'drift' ? 1.05 : 0.85;
+      this.nitroHiss.gain.setTargetAtTime(v.nitro * 0.09 * k, t, 0.05);
+      this.nitroRoar.gain.setTargetAtTime(v.nitro * 0.32 * k, t, 0.08);
+      if (this.lastNitro > 0.6 && v.nitro < 0.4) this.sys.burst(0.35, 3000, 0.12, 'highpass', this.out);
+      this.lastNitro = v.nitro;
+    }
+  }
+
+  /** Lift-off with boost: a big turbo's valve "pssh", a twin's compressor flutter. */
+  private blowOff(spool: number) {
+    const ctx = this.sys.ctx!;
+    const t = ctx.currentTime;
+    if (this.profile.turbo === 'single') {
+      this.sys.burst(0.55, 2400, 0.32 * spool, 'highpass', this.out, 0.5);
+    } else {
+      // flutter: noise chopped at ~20 Hz, dying away
+      const src = ctx.createBufferSource();
+      src.buffer = this.sys.noise;
+      const f = ctx.createBiquadFilter();
+      f.type = 'bandpass';
+      f.frequency.value = 1300;
+      f.Q.value = 1.2;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, t);
+      for (let i = 0; i < 9; i++) {
+        const a = 0.2 * spool * Math.pow(0.78, i);
+        g.gain.setValueAtTime(a, t + i * 0.048);
+        g.gain.setValueAtTime(a * 0.15, t + i * 0.048 + 0.026);
+      }
+      g.gain.setValueAtTime(0, t + 0.45);
+      src.connect(f).connect(g).connect(this.out);
+      src.start(t, Math.random());
+      src.stop(t + 0.5);
+    }
+    this.spool *= 0.25;
+  }
+
+  /** Backfire: a bang through the pipes plus a crackle. */
+  pop(strength: number) {
+    this.node?.port.postMessage({ pop: Math.min(1, strength) });
+    this.sys.burst(0.05 + strength * 0.05, 1600 + Math.random() * 1400, 0.22 * strength, 'bandpass', this.out, 3);
+  }
+
+  /** The nitro solenoid opens: a hard blast of gas and a deep thump. */
+  nitroStart() {
+    const k = this.profile.nitro === 'burst' ? 1.25 : this.profile.nitro === 'long' ? 0.85 : 1;
+    this.sys.burst(0.7, 1800, 0.4 * k, 'highpass', this.out, 0.6);
+    this.sys.burst(0.5, 160, 0.5 * k, 'lowpass', this.out, 4);
+    this.sys.tone(55, 0.45, 'sine', 0.45 * k, 0.6, this.out);
+  }
+
+  stop() {
+    if (this.stopped) return;
+    this.stopped = true;
+    const ctx = this.sys.ctx!;
+    const t = ctx.currentTime;
+    this.out.gain.setTargetAtTime(0, t, 0.05);
+    const nodes: AudioNode[] = [this.out];
+    if (this.panner) nodes.push(this.panner);
+    for (const s of this.sources) s.stop(t + 0.3);
+    if (this.legacy) for (const o of this.legacy.oscs) o.stop(t + 0.3);
+    const node = this.node;
+    setTimeout(() => {
+      node?.disconnect();
+      for (const n of nodes) n.disconnect();
+    }, 400);
+  }
+}
+
 export class AudioSystem {
-  ctx: AudioContext | null = null;
+  ctx: Ctx | null = null;
   private master!: GainNode;
-  private noise!: AudioBuffer;
-  private engine: { oscs: OscillatorNode[]; gain: GainNode; filter: BiquadFilterNode; voice: Voice } | null = null;
-  private whistle: { osc: OscillatorNode; gain: GainNode } | null = null;
-  private loops: Record<'boost' | 'screech' | 'wind', { gain: GainNode; filter: BiquadFilterNode }> | null = null;
+  /** everything goes through here (then the master and a compressor) */
+  bus!: GainNode;
+  noise!: AudioBuffer;
+  /** resolves to true once the engine worklet is loaded */
+  worklet: Promise<boolean> = Promise.resolve(false);
+  private voices = new Map<string, EngineVoice>();
+  private loops: Record<'screech' | 'wind', { gain: GainNode; filter: BiquadFilterNode; src: AudioBufferSourceNode }> | null = null;
+  private tyre: { f: number; q: number; vol: number } = TYRES.street;
   muted = false;
 
   /** Must be called from a user gesture. */
@@ -38,128 +273,131 @@ export class AudioSystem {
     }
     const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (!AC) return;
-    this.ctx = new AC();
+    this.ctx = new AC({ latencyHint: 'interactive' });
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.55;
+    this.bus = this.ctx.createGain();
     const comp = this.ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 4;
-    this.master.connect(comp).connect(this.ctx.destination);
+    this.bus.connect(this.master).connect(comp).connect(this.ctx.destination);
     const len = this.ctx.sampleRate * 2;
     this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const ctx = this.ctx;
+    if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+      const url = URL.createObjectURL(new Blob([ENGINE_WORKLET], { type: 'application/javascript' }));
+      this.worklet = ctx.audioWorklet.addModule(url).then(
+        () => true,
+        () => false,
+      );
+    }
+    this.onUnlock?.();
   }
+
+  /** Called once the context exists (lets a race that started silent pick its engines up). */
+  onUnlock: (() => void) | null = null;
 
   setMuted(m: boolean) {
     this.muted = m;
     if (this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.55, this.ctx.currentTime, 0.05);
   }
 
-  private noiseLoop(type: BiquadFilterType, freq: number, q: number) {
+  noiseLoop(type: BiquadFilterType, freq: number, q: number, dest: AudioNode = this.bus) {
     const ctx = this.ctx!;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     src.loop = true;
+    src.loopStart = Math.random();
     const filter = ctx.createBiquadFilter();
     filter.type = type;
     filter.frequency.value = freq;
     filter.Q.value = q;
     const gain = ctx.createGain();
     gain.gain.value = 0;
-    src.connect(filter).connect(gain).connect(this.master);
-    src.start();
-    return { gain, filter };
+    src.connect(filter).connect(gain).connect(dest);
+    src.start(0, Math.random() * 1.5);
+    return { gain, filter, src };
   }
 
-  startEngine(voice: Voice) {
+  // ------------------------------------------------------------ engines
+
+  /** Starts (or replaces) an engine voice. `full` adds turbo/nitro layers, `spatial` a panner. */
+  startVoice(id: string, profile: EngineProfile, opts: { full?: boolean; spatial?: boolean } = {}) {
     if (!this.ctx) return;
-    this.stopEngine();
-    const ctx = this.ctx;
-    const v = VOICES[voice];
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
-    filter.frequency.value = v.cutoff;
-    filter.Q.value = 2;
-    const shaper = ctx.createWaveShaper();
-    const curve = new Float32Array(256);
-    for (let i = 0; i < 256; i++) {
-      const x = (i / 255) * 2 - 1;
-      curve[i] = Math.tanh(x * 2.2);
+    this.stopVoice(id);
+    this.voices.set(id, new EngineVoice(this, profile, opts.full ?? true, opts.spatial ?? false));
+  }
+
+  hasVoice(id: string) {
+    return this.voices.has(id);
+  }
+
+  updateVoice(id: string, p: VoiceParams, dt: number) {
+    if (!this.ctx) return;
+    this.voices.get(id)?.update(p, dt);
+  }
+
+  pop(id: string, strength: number) {
+    if (!this.ctx) return;
+    this.voices.get(id)?.pop(strength);
+  }
+
+  nitroStart(id: string) {
+    if (!this.ctx) return;
+    this.voices.get(id)?.nitroStart();
+  }
+
+  stopVoice(id: string) {
+    const v = this.voices.get(id);
+    if (v) {
+      v.stop();
+      this.voices.delete(id);
     }
-    shaper.curve = curve;
-    const gain = ctx.createGain();
-    gain.gain.value = 0;
-    const mixer = ctx.createGain();
-    mixer.gain.value = 0.6;
-    const oscs = v.waves.map((w, i) => {
-      const o = ctx.createOscillator();
-      o.type = w;
-      const g = ctx.createGain();
-      g.gain.value = v.mix[i];
-      o.connect(g).connect(mixer);
-      o.start();
-      return o;
-    });
-    mixer.connect(shaper).connect(filter).connect(gain).connect(this.master);
-    this.engine = { oscs, gain, filter, voice };
+  }
 
-    const wo = ctx.createOscillator();
-    wo.type = 'sine';
-    const wg = ctx.createGain();
-    wg.gain.value = 0;
-    wo.connect(wg).connect(this.master);
-    wo.start();
-    this.whistle = { osc: wo, gain: wg };
-
+  /** The player's engine plus tyre screech and wind tuned to the build. */
+  startEngine(profile: EngineProfile) {
+    if (!this.ctx) return;
+    this.startVoice('player', profile, { full: true });
+    this.tyre = TYRES[profile.tires];
+    this.stopLoops();
     this.loops = {
-      boost: this.noiseLoop('bandpass', 500, 0.8),
-      screech: this.noiseLoop('bandpass', 1400, 6),
+      screech: this.noiseLoop('bandpass', this.tyre.f, this.tyre.q),
       wind: this.noiseLoop('lowpass', 600, 0.5),
     };
   }
 
+  updateEnv(p: EnvParams) {
+    if (!this.ctx || !this.loops) return;
+    const t = this.ctx.currentTime;
+    const l = this.loops;
+    l.screech.gain.gain.setTargetAtTime(p.grounded ? p.slip * 0.2 * this.tyre.vol : 0, t, 0.04);
+    l.screech.filter.frequency.setTargetAtTime(this.tyre.f * (0.92 + p.slip * 0.15), t, 0.08);
+    l.wind.gain.gain.setTargetAtTime(Math.min(0.35, (p.speed / 90) ** 2 * 0.35), t, 0.1);
+    l.wind.filter.frequency.setTargetAtTime(300 + p.speed * 12, t, 0.1);
+  }
+
+  private stopLoops() {
+    if (!this.loops || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    for (const l of Object.values(this.loops)) {
+      l.gain.gain.setTargetAtTime(0, t, 0.05);
+      l.src.stop(t + 0.3);
+    }
+    this.loops = null;
+  }
+
+  /** Stops every engine voice and loop. */
   stopEngine() {
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    if (this.engine) {
-      this.engine.gain.gain.setTargetAtTime(0, t, 0.05);
-      for (const o of this.engine.oscs) o.stop(t + 0.3);
-      this.engine = null;
-    }
-    if (this.whistle) {
-      this.whistle.osc.stop(t + 0.1);
-      this.whistle = null;
-    }
-    if (this.loops) {
-      for (const l of Object.values(this.loops)) l.gain.gain.setTargetAtTime(0, t, 0.05);
-      this.loops = null;
-    }
+    for (const id of [...this.voices.keys()]) this.stopVoice(id);
+    this.stopLoops();
   }
 
-  updateEngine(p: EngineParams) {
-    if (!this.ctx || !this.engine) return;
-    const t = this.ctx.currentTime;
-    const v = VOICES[this.engine.voice];
-    const f = v.base * (1 + p.rpm * v.range);
-    const ratios = [1, 0.5, 2.01];
-    this.engine.oscs.forEach((o, i) => o.frequency.setTargetAtTime(f * ratios[i], t, 0.02));
-    this.engine.filter.frequency.setTargetAtTime(v.cutoff * (0.5 + p.throttle * 0.7 + p.rpm * 0.6), t, 0.05);
-    this.engine.gain.gain.setTargetAtTime(0.16 + p.throttle * 0.12 + p.boost * 0.06, t, 0.05);
-    if (this.whistle) {
-      this.whistle.osc.frequency.setTargetAtTime(1800 + p.rpm * 2600, t, 0.05);
-      this.whistle.gain.gain.setTargetAtTime(p.whistle * p.throttle * p.rpm * 0.025, t, 0.08);
-    }
-    if (this.loops) {
-      this.loops.boost.gain.gain.setTargetAtTime(p.boost * 0.35, t, 0.05);
-      this.loops.boost.filter.frequency.setTargetAtTime(300 + p.boost * 900, t, 0.1);
-      this.loops.screech.gain.gain.setTargetAtTime(p.grounded ? p.slip * 0.22 : 0, t, 0.04);
-      this.loops.wind.gain.gain.setTargetAtTime(Math.min(0.35, (p.speed / 90) ** 2 * 0.35), t, 0.1);
-      this.loops.wind.filter.frequency.setTargetAtTime(300 + p.speed * 12, t, 0.1);
-    }
-  }
+  // ------------------------------------------------------------ one-shots
 
-  private tone(freq: number, dur: number, type: OscillatorType = 'sine', vol = 0.25, slide = 0) {
+  tone(freq: number, dur: number, type: OscillatorType = 'sine', vol = 0.25, slide = 0, dest: AudioNode = this.bus) {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
@@ -170,13 +408,14 @@ export class AudioSystem {
     const g = ctx.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    o.connect(g).connect(this.master);
+    o.connect(g).connect(dest);
     o.start(t);
     o.stop(t + dur + 0.02);
   }
 
-  private burst(dur: number, freq: number, vol: number, type: BiquadFilterType = 'bandpass') {
-    if (!this.ctx) return;
+  /** Filtered noise burst; `sweep` multiplies the filter frequency over the burst. */
+  burst(dur: number, freq: number, vol: number, type: BiquadFilterType = 'bandpass', dest: AudioNode = this.bus, sweep = 3) {
+    if (!this.ctx || vol <= 0) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
     const src = ctx.createBufferSource();
@@ -184,25 +423,28 @@ export class AudioSystem {
     const f = ctx.createBiquadFilter();
     f.type = type;
     f.frequency.setValueAtTime(freq, t);
-    f.frequency.exponentialRampToValueAtTime(freq * 3, t + dur);
+    f.frequency.exponentialRampToValueAtTime(Math.max(30, freq * sweep), t + dur);
     const g = ctx.createGain();
     g.gain.setValueAtTime(vol, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(f).connect(g).connect(this.master);
+    src.connect(f).connect(g).connect(dest);
     src.start(t, Math.random());
     src.stop(t + dur);
   }
 
   boost() {
-    this.burst(0.7, 300, 0.5);
-    this.tone(90, 0.5, 'sawtooth', 0.12, 2.5);
+    this.burst(0.7, 300, 0.4);
+    this.tone(90, 0.5, 'sawtooth', 0.1, 2.5);
   }
   pickup() {
     this.tone(880, 0.12, 'triangle', 0.18);
     setTimeout(() => this.tone(1320, 0.18, 'triangle', 0.16), 70);
+    setTimeout(() => this.burst(0.25, 5000, 0.08, 'highpass'), 40);
   }
-  land(strength: number) {
-    this.tone(70, 0.25, 'sine', 0.35 * strength, 0.5);
+  /** Heavier cars land with a deeper, harder thump. */
+  land(strength: number, mass = 1300) {
+    const k = mass / 1300;
+    this.tone(70 / Math.sqrt(k), 0.25, 'sine', 0.35 * strength * Math.min(1.3, k), 0.5);
     this.burst(0.15, 200, 0.2 * strength, 'lowpass');
   }
   wall(strength: number) {
