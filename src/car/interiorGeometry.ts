@@ -289,7 +289,7 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const driverX = Math.min(0.37, f.halfW * 0.48);
   const ez = f.zRoofFront - 0.39;
   // sit as tall as the headroom allows: the road over the bonnet is what matters
-  const ey = Math.min(f.roofAt(ez) - 0.13, Math.max(f.beltY + 0.15, f.roofY - 0.16));
+  const ey = Math.min(f.roofAt(ez) - 0.18, Math.max(f.beltY + 0.1, f.roofY - 0.21));
   const eye = new Vector3(driverX, ey, ez);
   // the line from the eye over the base of the windscreen: nothing in the cabin may poke above it
   const cowlY = Math.min(f.beltY, f.roofAt(f.zCowl));
