@@ -11,6 +11,7 @@ import {
 } from '../car/parts';
 import { computeStats, displayStats, type DisplayStats } from '../car/stats';
 import { audio } from '../core/audio';
+import { isTouch } from '../core/fullscreen';
 import type { ControlMode, Input } from '../core/input';
 import { checkAndReload, onUpdatePhase, type UpdatePhase } from '../core/updater';
 import { TILT_LOCK_DEG, TILT_SENS_LABELS, type TiltSens } from '../core/tilt';
@@ -151,7 +152,9 @@ export class GarageScreen {
         <div class="options"></div>
         <div class="stats"></div>
       </aside>
-      <div class="garage-hint">Arrasta para rodar o carro</div>`;
+      <div class="garage-hint"><span class="orbit-ico" aria-hidden="true"></span>${
+        isTouch() ? 'Arrasta para orbitar · Pinça para zoom · Toque duplo repõe' : 'Arrasta para orbitar · Roda para zoom · Duplo clique repõe'
+      }</div>`;
     root.appendChild(this.el);
     this.slotsEl = this.el.querySelector('.slots')!;
     this.subEl = this.el.querySelector('.subslots')!;

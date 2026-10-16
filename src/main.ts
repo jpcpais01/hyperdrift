@@ -200,6 +200,7 @@ class App {
     this.menu.show(state === 'menu');
     if (this.atRest()) applyPendingUpdate();
     this.garage.show(state === 'garage', this.build);
+    this.garageScene.setActive(state === 'garage');
     this.results.show(null);
     this.pause.show(false);
     this.controls?.show(false);
@@ -224,6 +225,7 @@ class App {
     this.state = 'race';
     this.menu.show(false);
     this.garage.show(false);
+    this.garageScene.setActive(false);
     this.results.show(null);
     this.pause.show(false);
     this.controls?.show(false);

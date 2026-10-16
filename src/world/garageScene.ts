@@ -52,9 +52,9 @@ export class GarageScene {
   private turntable = new Group();
   private car: CarVisual | null = null;
   private angle = 0.6;
-  private dragging = false;
-  private lastX = 0;
-  private idle = 0;
+  /** turntable spin speed: eases in when the player leaves the camera alone */
+  private spin = 0;
+  private orbit = new GarageOrbit();
   private demo: { t: number; nitro: boolean; dt: Drivetrain; nitroFx: number; lit: boolean } | null = null;
 
   constructor(private readonly sky: Sky) {
@@ -133,35 +133,205 @@ export class GarageScene {
   }
 
   bindDrag(el: HTMLElement) {
-    el.addEventListener('pointerdown', (e) => {
-      this.dragging = true;
-      this.lastX = e.clientX;
-    });
-    window.addEventListener('pointermove', (e) => {
-      if (!this.dragging) return;
-      this.angle += (e.clientX - this.lastX) * 0.01;
-      this.lastX = e.clientX;
-      this.idle = 0;
-    });
-    window.addEventListener('pointerup', () => (this.dragging = false));
+    this.orbit.bind(el);
+  }
+
+  /** input only steers the camera while the garage is on screen */
+  setActive(v: boolean) {
+    this.orbit.setActive(v);
   }
 
   update(dt: number, time: number, camera: PerspectiveCamera, sky: Sky, viewOffset = 0) {
-    this.idle += dt;
-    if (!this.dragging && this.idle > 1.5) this.angle += dt * 0.35;
+    const o = this.orbit;
+    o.update(dt);
+    // the turntable keeps showing the car off whenever the player isn't orbiting
+    this.spin += ((o.idle > 3 ? 0.35 : 0) - this.spin) * (1 - Math.exp(-1.2 * dt));
+    this.angle += this.spin * dt;
     this.turntable.rotation.y = this.angle;
     const narrow = camera.aspect < 1.2;
-    const dist = narrow ? 10.5 : 7.6 + viewOffset * 0.6;
+    const baseDist = narrow ? 10.5 : 7.6 + viewOffset * 0.6;
+    const lookY = narrow ? -0.6 : 0.55;
+    const camY = narrow ? 3.2 : 2.1;
+    const basePitch = Math.atan2(camY - lookY, baseDist);
+    const dist = Math.hypot(baseDist, camY - lookY) * o.zoom;
+    // keep the camera above the deck and below straight-down
+    const minPitch = Math.asin(Math.max(-0.95, Math.min(0.95, (0.35 - lookY) / dist)));
+    const pitch = Math.max(minPitch, Math.min(1.35, basePitch + o.pitch));
+    if (pitch !== basePitch + o.pitch) o.pitch = pitch - basePitch;
+    const yaw = 0.5 + o.yaw;
     // shift the view along the camera's right vector so the car sits beside the parts panel
-    const a = 0.5;
-    const rx = Math.cos(a) * viewOffset;
-    const rz = -Math.sin(a) * viewOffset;
-    camera.position.set(Math.sin(a) * dist + rx, narrow ? 3.2 : 2.1, Math.cos(a) * dist + rz);
-    camera.lookAt(rx, narrow ? -0.6 : 0.55, rz);
+    // (scaled with zoom so it stays in the same spot on screen)
+    const off = viewOffset * o.zoom;
+    const rx = Math.cos(yaw) * off;
+    const rz = -Math.sin(yaw) * off;
+    const flat = Math.cos(pitch) * dist;
+    camera.position.set(rx + Math.sin(yaw) * flat, lookY + Math.sin(pitch) * dist, rz + Math.cos(yaw) * flat);
+    camera.lookAt(rx, lookY, rz);
     camera.fov = 40;
     camera.updateProjectionMatrix();
     this.updatePreview(dt, time);
     sky.update(time, camera.position, -80, ORIGIN);
     this.scene.fog = null;
   }
+}
+
+const ZOOM_MIN = 0.55;
+const ZOOM_MAX = 1.6;
+
+/**
+ * Showroom camera: drag to orbit (with a flick of inertia), pinch or wheel to
+ * zoom, double-tap / double-click to glide back to the default view.
+ */
+class GarageOrbit {
+  yaw = 0;
+  pitch = 0;
+  zoom = 1;
+  /** seconds since the player last touched the camera */
+  idle = 10;
+  private active = false;
+  private yawVel = 0;
+  private pitchVel = 0;
+  private zoomTarget = 1;
+  private resetting = false;
+  private pointers = new Map<number, { x: number; y: number }>();
+  private pinchDist = 0;
+  private lastMove = 0;
+  private down = { x: 0, y: 0, t: 0, moved: false };
+  private lastTap = 0;
+
+  setActive(v: boolean) {
+    this.active = v;
+    if (!v) {
+      this.pointers.clear();
+      this.yawVel = this.pitchVel = 0;
+    }
+  }
+
+  bind(el: HTMLElement) {
+    el.addEventListener('pointerdown', (e) => {
+      if (!this.active) return;
+      el.setPointerCapture?.(e.pointerId);
+      this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      this.touch();
+      this.yawVel = this.pitchVel = 0;
+      this.resetting = false;
+      if (this.pointers.size === 1) this.down = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+      else {
+        this.down.moved = true;
+        this.pinchDist = this.spread();
+      }
+      this.lastMove = performance.now();
+    });
+    el.addEventListener('pointermove', (e) => {
+      const p = this.pointers.get(e.pointerId);
+      if (!p || !this.active) return;
+      const dx = e.clientX - p.x;
+      const dy = e.clientY - p.y;
+      p.x = e.clientX;
+      p.y = e.clientY;
+      this.touch();
+      if (Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 8) this.down.moved = true;
+      if (this.pointers.size >= 2) {
+        const d = this.spread();
+        if (this.pinchDist > 0 && d > 0) this.setZoom(this.zoomTarget * (this.pinchDist / d), true);
+        this.pinchDist = d;
+        return;
+      }
+      // same feel on any screen size: a full-width drag is roughly one lap around the car
+      const k = 5.5 / Math.max(500, el.clientWidth);
+      const now = performance.now();
+      const step = Math.max(1, now - this.lastMove) / 1000;
+      this.lastMove = now;
+      this.yaw -= dx * k;
+      this.pitch += dy * k;
+      // smoothed release velocity for the flick
+      const a = Math.min(1, step * 18);
+      this.yawVel += ((-dx * k) / step - this.yawVel) * a;
+      this.pitchVel += ((dy * k) / step - this.pitchVel) * a;
+    });
+    const up = (e: PointerEvent) => {
+      if (!this.pointers.delete(e.pointerId)) return;
+      this.touch();
+      if (this.pointers.size === 1) {
+        // lifting one finger of a pinch: carry on orbiting with the other, no jump
+        this.pinchDist = 0;
+        this.yawVel = this.pitchVel = 0;
+        return;
+      }
+      if (this.pointers.size > 0) return;
+      const now = performance.now();
+      // a finger that stopped before letting go shouldn't fling the car
+      if (now - this.lastMove > 90) this.yawVel = this.pitchVel = 0;
+      this.yawVel = clamp(this.yawVel, -9, 9);
+      this.pitchVel = clamp(this.pitchVel, -4, 4);
+      if (!this.down.moved && now - this.down.t < 300 && e.type === 'pointerup') {
+        if (now - this.lastTap < 320) {
+          this.reset();
+          this.lastTap = 0;
+        } else this.lastTap = now;
+      }
+    };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener(
+      'wheel',
+      (e) => {
+        if (!this.active) return;
+        e.preventDefault();
+        this.touch();
+        this.resetting = false;
+        const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+        // trackpad pinch arrives as ctrl+wheel with small deltas
+        this.setZoom(this.zoomTarget * Math.exp(clamp(px, -120, 120) * (e.ctrlKey ? 0.01 : 0.0015)));
+      },
+      { passive: false },
+    );
+  }
+
+  private spread() {
+    const [a, b] = [...this.pointers.values()];
+    return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+  }
+
+  private setZoom(z: number, instant = false) {
+    // a little rubber band past the limits, settled back on release
+    this.zoomTarget = clamp(z, ZOOM_MIN * 0.92, ZOOM_MAX * 1.06);
+    if (instant) this.zoom = this.zoomTarget;
+  }
+
+  private touch() {
+    this.idle = 0;
+    document.querySelector('.garage-hint')?.classList.add('used');
+  }
+
+  private reset() {
+    this.resetting = true;
+    this.yawVel = this.pitchVel = 0;
+    this.zoomTarget = 1;
+  }
+
+  update(dt: number) {
+    this.idle += dt;
+    if (this.pointers.size === 0) {
+      this.yaw += this.yawVel * dt;
+      this.pitch += this.pitchVel * dt;
+      const f = Math.exp(-3.2 * dt);
+      this.yawVel *= f;
+      this.pitchVel *= Math.exp(-5 * dt);
+      this.zoomTarget = clamp(this.zoomTarget, ZOOM_MIN, ZOOM_MAX);
+    }
+    if (this.resetting) {
+      const f = 1 - Math.exp(-5 * dt);
+      // take the short way round
+      const target = Math.round(this.yaw / (Math.PI * 2)) * Math.PI * 2;
+      this.yaw += (target - this.yaw) * f;
+      this.pitch += -this.pitch * f;
+      if (Math.abs(target - this.yaw) < 0.002 && Math.abs(this.pitch) < 0.002 && Math.abs(this.zoom - 1) < 0.002) this.resetting = false;
+    }
+    this.zoom += (this.zoomTarget - this.zoom) * (1 - Math.exp(-12 * dt));
+  }
+}
+
+function clamp(v: number, a: number, b: number) {
+  return v < a ? a : v > b ? b : v;
 }
