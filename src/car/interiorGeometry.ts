@@ -28,9 +28,40 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { cabinFrame, type CabinFrame } from './geometry';
 import type { CarBuild } from './parts';
 
-export type IBucket = 'dark' | 'soft' | 'leather' | 'fabric' | 'carbon' | 'metal' | 'chrome' | 'accent' | 'wood' | 'glow' | 'red';
+export type IBucket =
+  | 'dark'
+  | 'soft'
+  | 'leather'
+  | 'perf'
+  | 'fabric'
+  | 'headliner'
+  | 'grille'
+  | 'carbon'
+  | 'metal'
+  | 'chrome'
+  | 'accent'
+  | 'stitch'
+  | 'wood'
+  | 'glow'
+  | 'red';
 export type IBuckets = Record<IBucket, BufferGeometry[]>;
-export const emptyI = (): IBuckets => ({ dark: [], soft: [], leather: [], fabric: [], carbon: [], metal: [], chrome: [], accent: [], wood: [], glow: [], red: [] });
+export const emptyI = (): IBuckets => ({
+  dark: [],
+  soft: [],
+  leather: [],
+  perf: [],
+  fabric: [],
+  headliner: [],
+  grille: [],
+  carbon: [],
+  metal: [],
+  chrome: [],
+  accent: [],
+  stitch: [],
+  wood: [],
+  glow: [],
+  red: [],
+});
 
 // ---------------------------------------------------------------- helpers
 
@@ -234,6 +265,10 @@ export interface CockpitLayout {
   dashTop: number;
   /** dash face nearest the driver, at the top edge */
   zFace: number;
+  /** height of the windscreen base */
+  cowlY: number;
+  /** height of the eye-to-windscreen-base sight line at a given z: the cabin stays below it */
+  sightAt: (z: number) => number;
   /** steering wheel centre and the column's tilt back from vertical */
   wheel: Vector3;
   wheelTilt: number;
@@ -253,17 +288,22 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const f = cabinFrame(bodyId);
   const driverX = Math.min(0.37, f.halfW * 0.48);
   const ez = f.zRoofFront - 0.39;
-  // tall cabins don't seat the driver higher than a coupé does over its dash, or the gauges drop out of sight
-  const ey = Math.max(f.beltY + 0.1, Math.min(f.roofY - 0.19, f.beltY + 0.22));
+  // sit as tall as the headroom allows: the road over the bonnet is what matters
+  const ey = Math.min(f.roofAt(ez) - 0.13, Math.max(f.beltY + 0.15, f.roofY - 0.16));
   const eye = new Vector3(driverX, ey, ez);
-  const dashTop = f.beltY - 0.025;
+  // the line from the eye over the base of the windscreen: nothing in the cabin may poke above it
+  const cowlY = Math.min(f.beltY, f.roofAt(f.zCowl));
+  const sightAt = (z: number) => ey - ((ey - cowlY) * (z - ez)) / (f.zCowl - ez);
   const zFace = ez + 0.6;
-  // the wheel sits low enough to see the gauges through its top, even in low-roofed bodies
+  const dashTop = Math.min(f.beltY - 0.025, sightAt(zFace) - 0.03);
+  // the wheel's rim stays just under that line; the gauges are seen through its upper opening
   const wheelTilt = 0.36;
-  const clusterY = dashTop + 0.015;
-  const clusterZ = zFace - 0.01;
-  const sight = ey + ((clusterY - ey) * 0.4) / (clusterZ - ez);
-  const wheel = new Vector3(driverX, Math.max(ey - 0.235, sight + 0.03 - 0.17 * Math.cos(wheelTilt)), ez + 0.4);
+  const wz = ez + 0.4;
+  const wheelY = sightAt(wz) - 0.03 - RIM_MAX * Math.cos(wheelTilt);
+  const wheel = new Vector3(driverX, wheelY, wz);
+  const clusterZ = zFace - 0.03;
+  const through = wheelY + 0.125;
+  const clusterY = ey + ((through - ey) * (clusterZ - ez)) / (wz - ez);
   const consoleY = f.floorY + 0.3;
   return {
     frame: f,
@@ -272,19 +312,24 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
     floorY: f.floorY,
     dashTop,
     zFace,
+    cowlY,
+    sightAt,
     wheel,
-    wheelTilt: 0.36,
-    // the instrument pod sits on top of the dash, seen through the top of the wheel
-    cluster: new Vector3(driverX, dashTop + 0.015, zFace - 0.01),
+    wheelTilt,
+    cluster: new Vector3(driverX, clusterY, clusterZ),
     consoleY,
     shifter: new Vector3(0.03, consoleY, ez + 0.46),
     handbrake: new Vector3(0.11, consoleY, ez + 0.22),
-    mirror: new Vector3(0, f.roofAt(f.zRoofFront - 0.09) - 0.16, f.zRoofFront - 0.09),
+    // hung from the header, just under the headliner
+    mirror: new Vector3(0, f.roofAt(f.zRoofFront - 0.03) - 0.118, f.zRoofFront - 0.03),
     seatZ: ez - 0.02,
     shoulderL: new Vector3(driverX + 0.2, ey - 0.25, ez - 0.07),
     shoulderR: new Vector3(driverX - 0.2, ey - 0.25, ez - 0.07),
   };
 }
+
+/** The largest steering-wheel rim radius (classic). */
+const RIM_MAX = 0.19;
 
 // ---------------------------------------------------------------- cabin base
 
@@ -293,7 +338,7 @@ function seat(b: IBuckets, x: number, L: CockpitLayout, style: string) {
   const fy = L.floorY;
   const race = style === 'race';
   const shell = race ? b.carbon : b.leather;
-  const insert = race ? b.fabric : style === 'future' ? b.dark : b.fabric;
+  const insert = race ? b.fabric : b.perf;
   // cushion
   b.dark.push(put(rb(0.46, 0.1, 0.5, 0.04, 3), [x, fy + 0.07, z + 0.12]));
   insert.push(put(rb(0.26, 0.05, 0.42, 0.02, 2), [x, fy + 0.135, z + 0.13], [-0.05, 0, 0]));
@@ -305,6 +350,12 @@ function seat(b: IBuckets, x: number, L: CockpitLayout, style: string) {
   const back = new Vector3(0, 0, -1);
   shell.push(beam(hip.clone().add(new Vector3(0, 0, -0.04)), top.clone().add(new Vector3(0, 0, -0.04)), 0.5, 0.1, back, 0.05));
   insert.push(beam(hip.clone().add(new Vector3(0, 0.04, 0.02)), top.clone().add(new Vector3(0, -0.04, 0.02)), 0.28, 0.05, back, 0.02));
+  // contrast stitching down both sides of the insert and across the cushion
+  for (const s of [-1, 1]) {
+    const o = new Vector3(s * 0.142, 0, 0.046);
+    b.stitch.push(beam(hip.clone().add(o).add(new Vector3(0, 0.06, 0)), top.clone().add(o).add(new Vector3(0, -0.06, 0)), 0.003, 0.003, back, 0.001));
+    b.stitch.push(put(rb(0.003, 0.003, 0.4, 0.001), [x + s * 0.132, fy + 0.162, z + 0.13], [-0.05, 0, 0]));
+  }
   for (const s of [-1, 1]) {
     const o = new Vector3(s * 0.2, 0, 0.02);
     shell.push(beam(hip.clone().add(o).add(new Vector3(0, 0.08, 0)), top.clone().add(o).add(new Vector3(0, -0.1, 0)), 0.1, 0.15, new Vector3(-s * 0.35, 0, -1), 0.045));
@@ -384,6 +435,10 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
   if (!race) {
     b.dark.push(extrudeZY([[f.zCowl + 0.03, t - 0.02, 0], [zf + 0.15, t + 0.02, 0.06], [zf + 0.04, t + 0.012, 0.02], [zf + 0.08, t - 0.01, 0], [f.zCowl + 0.03, t - 0.05, 0]], -wIn + 0.03, wIn - 0.03, 0.02));
   }
+  if (!race) {
+    // piping along the dash's leading edge
+    b.stitch.push(put(rb(2 * wIn - 0.08, 0.003, 0.003, 0.001), [0, t + 0.006, zf + 0.03]));
+  }
   if (style === 'gt') {
     // brushed trim strip across the passenger side, with a stitched leather roll above it
     b.metal.push(extrudeZY([[zf + 0.02, t - 0.1, 0.006], [zf + 0.012, t - 0.135, 0.006], [zf + 0.06, t - 0.14, 0], [zf + 0.07, t - 0.1, 0]], -wIn + 0.05, 0.16, 0.008));
@@ -410,27 +465,37 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
   // instrument binnacle hood (the dash part holds the display; see dashPart)
   const cl = L.cluster;
   const hoodW = 0.38;
+  // a shallow brow: it shades the dials without hiding their tops from the driver
   const hood = extrudeXY(
     [
-      [-hoodW / 2, -0.02, 0],
-      [-hoodW / 2 + 0.02, 0.07, 0.04],
-      [hoodW / 2 - 0.02, 0.07, 0.04],
-      [hoodW / 2, -0.02, 0],
-      [hoodW / 2 - 0.02, -0.02, 0],
-      [hoodW / 2 - 0.035, 0.05, 0.03],
-      [-hoodW / 2 + 0.035, 0.05, 0.03],
-      [-hoodW / 2 + 0.02, -0.02, 0],
+      [-hoodW / 2, 0, 0],
+      [-hoodW / 2 + 0.025, 0.03, 0.028],
+      [hoodW / 2 - 0.025, 0.03, 0.028],
+      [hoodW / 2, 0, 0],
+      [hoodW / 2 - 0.02, 0, 0],
+      [hoodW / 2 - 0.038, 0.017, 0.017],
+      [-hoodW / 2 + 0.038, 0.017, 0.017],
+      [-hoodW / 2 + 0.02, 0, 0],
     ],
-    -0.1,
-    0.12,
-    0.01,
+    -0.03,
+    0.14,
+    0.008,
   );
-  hood.rotateX(-0.12);
+  // dipping away from the driver, into the dash
+  hood.rotateX(0.15);
   // the digital dash floats its own screen above the dash instead
   if (build.dash !== 'digital') {
-    (race ? b.carbon : b.dark).push(put(hood, [cl.x, cl.y + 0.035, cl.z]));
-    // the pod's body under the hood, down into the dash
-    (race ? b.carbon : b.dark).push(put(rb(hoodW, 0.09, 0.2, 0.02, 2), [cl.x, cl.y - 0.04, cl.z + 0.1]));
+    const hoodMat = race ? b.carbon : style === 'gt' ? b.leather : b.dark;
+    put(hood, [cl.x, cl.y + 0.079, cl.z]);
+    // tall cabins look down steeply over the bonnet: sink the brow until it stays under that line
+    const hp = hood.getAttribute('position');
+    let over = -1;
+    for (let i = 0; i < hp.count; i++) over = Math.max(over, hp.getY(i) - L.sightAt(hp.getZ(i)));
+    const sink = Math.max(0, over + 0.006);
+    hoodMat.push(hood.translate(0, -sink, 0));
+    // the pod's body behind the dials, down into the dash
+    (race ? b.carbon : b.dark).push(put(rb(hoodW - 0.01, 0.15, 0.2, 0.02, 2), [cl.x, cl.y - 0.005, cl.z + 0.15]));
+    if (!race) b.stitch.push(put(rb(hoodW - 0.06, 0.003, 0.003, 0.001), [cl.x, cl.y + 0.106 - sink, cl.z - 0.02], [0.15, 0, 0]));
   }
 
   // --- steering column shroud
@@ -452,16 +517,31 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
   ];
   (race ? b.carbon : b.dark).push(extrudeZY(tunnel, -cw, cw, 0.02));
   if (!race) {
-    // leather armrest between the seats and padded tunnel sides
+    // leather armrest between the seats and padded tunnel sides, brushed trim along the top edges
     b.leather.push(put(rb(0.2, 0.06, 0.34, 0.025, 3), [0, L.consoleY + 0.035, ez - 0.25]));
-    b.accent.push(put(rb(0.204, 0.004, 0.3, 0.002), [0, L.consoleY + 0.05, ez - 0.25]));
-    for (const s of [-1, 1]) b.leather.push(put(rb(0.012, 0.18, 0.6, 0.006), [s * (cw + 0.004), fy + 0.18, ez - 0.05]));
+    b.stitch.push(put(rb(0.204, 0.003, 0.3, 0.0015), [0, L.consoleY + 0.05, ez - 0.25]));
+    for (const s of [-1, 1]) {
+      b.leather.push(put(rb(0.012, 0.18, 0.6, 0.006), [s * (cw + 0.004), fy + 0.18, ez - 0.05]));
+      b.metal.push(put(rb(0.008, 0.008, 0.62, 0.003), [s * (cw - 0.004), L.consoleY + 0.004, ez + 0.02]));
+    }
+    // starter button and drive-mode dial beside the lever
+    b.chrome.push(put(ring(0.018, 0.003, 24, 6), [-0.075, L.consoleY + 0.006, ez + 0.4], [Math.PI / 2, 0, 0]));
+    b.red.push(put(new CylinderGeometry(0.015, 0.016, 0.01, 24), [-0.075, L.consoleY + 0.008, ez + 0.4]));
+    b.chrome.push(put(new CylinderGeometry(0.022, 0.024, 0.022, 28), [-0.075, L.consoleY + 0.012, ez + 0.3]));
+    b.dark.push(put(new CylinderGeometry(0.016, 0.016, 0.004, 24), [-0.075, L.consoleY + 0.0235, ez + 0.3]));
+    b.glow.push(put(rb(0.003, 0.002, 0.012, 0.001), [-0.075, L.consoleY + 0.026, ez + 0.31]));
+    // two cup holders with brushed rings
+    for (const z of [ez + 0.02, ez + 0.11]) {
+      b.dark.push(put(new CylinderGeometry(0.036, 0.034, 0.012, 24), [-0.02, L.consoleY + 0.002, z]));
+      b.metal.push(put(ring(0.037, 0.003, 28, 6), [-0.02, L.consoleY + 0.008, z], [Math.PI / 2, 0, 0]));
+    }
   } else {
-    // bare aluminium floor plate under the shifter
+    // bare aluminium floor plate under the shifter, and a fire-system pull
     b.metal.push(put(rb(0.22, 0.008, 0.3, 0.004), [0, L.consoleY + 0.004, ez + 0.36]));
+    b.red.push(put(new CylinderGeometry(0.014, 0.014, 0.02, 16), [-0.08, L.consoleY + 0.02, ez + 0.12]));
+    b.chrome.push(put(ring(0.017, 0.0035, 18, 6), [-0.08, L.consoleY + 0.01, ez + 0.12], [Math.PI / 2, 0, 0]));
+    b.dark.push(put(rb(0.18, 0.02, 0.12, 0.008), [0, L.consoleY + 0.004, ez + 0.05]));
   }
-  // cup holders / phone tray
-  b.dark.push(put(rb(0.18, 0.02, 0.12, 0.008), [0, L.consoleY + 0.004, ez + 0.05]));
 
   // --- floor
   (race ? b.accent : b.fabric).push(put(rb(2 * wIn, 0.02, f.zCowl - ez + 0.9, 0.005), [0, fy - 0.01, (f.zCowl + ez - 0.9) / 2]));
@@ -470,63 +550,146 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
   }
   b.dark.push(put(rb(2 * wIn, 0.4, 0.04, 0.01), [0, fy + 0.2, Math.min(f.zCowl, zf + 0.45)], [0.6, 0, 0]));
 
-  // --- doors, mirrored: card, armrest, handle, speaker, stitched top
+  // --- doors, mirrored: a layered card with a stitched cap, an inset panel, armrest with
+  // pull and window switches, chrome release, speaker and map pocket
   const dz0 = f.zB - 0.05;
   const dz1 = Math.max(zf + 0.05, f.zCowl - 0.12);
   const dlen = dz1 - dz0;
   const dzc = (dz0 + dz1) / 2;
   const dx = wIn - 0.01;
   const door = emptyI();
-  (race ? door.carbon : door.soft).push(put(rb(0.04, f.beltY - fy, dlen, 0.015), [dx, (f.beltY + fy) / 2, dzc]));
-  door.dark.push(put(rb(0.06, 0.03, dlen + 0.02, 0.014, 3), [dx - 0.012, f.beltY - 0.005, dzc]));
+  const by = f.beltY;
+  (race ? door.carbon : door.soft).push(put(rb(0.04, by - fy, dlen, 0.015), [dx, (by + fy) / 2, dzc]));
   if (!race) {
-    door.leather.push(put(rb(0.012, 0.16, dlen * 0.72, 0.006), [dx - 0.024, f.beltY - 0.13, dzc + 0.02]));
-    door.accent.push(put(rb(0.004, 0.003, dlen * 0.7, 0.001), [dx - 0.031, f.beltY - 0.052, dzc + 0.02]));
-    door.leather.push(put(rb(0.08, 0.05, 0.5, 0.02, 3), [dx - 0.05, 0.62, ez + 0.05]));
-    door.chrome.push(put(rb(0.016, 0.03, 0.12, 0.008), [dx - 0.03, f.beltY - 0.12, ez + 0.42]));
-    door.dark.push(put(new CylinderGeometry(0.07, 0.07, 0.02, 24), [dx - 0.02, 0.43, ez + 0.5], [0, 0, Math.PI / 2]));
-    door.metal.push(put(ring(0.07, 0.006, 24, 6), [dx - 0.03, 0.43, ez + 0.5], [0, Math.PI / 2, 0]));
-    if (future) door.glow.push(put(rb(0.006, 0.006, dlen * 0.85, 0.002), [dx - 0.034, f.beltY - 0.04, dzc]));
+    // soft cap along the window line, stitched along its inner edge
+    door.leather.push(put(rb(0.07, 0.036, dlen + 0.02, 0.016, 3), [dx - 0.014, by - 0.006, dzc]));
+    door.stitch.push(put(rb(0.003, 0.003, dlen - 0.02, 0.001), [dx - 0.049, by - 0.006, dzc]));
+    // inset panel: perforated leather framed by piping
+    const iz0 = dz0 + 0.07;
+    const iz1 = Math.min(dz1 - 0.1, ez + 0.5);
+    const ih = 0.13;
+    const iy = by - 0.04 - ih / 2;
+    door.perf.push(put(rb(0.012, ih, iz1 - iz0, 0.006, 2), [dx - 0.024, iy, (iz0 + iz1) / 2]));
+    for (const yy of [iy + ih / 2 + 0.004, iy - ih / 2 - 0.004]) door.accent.push(put(rb(0.008, 0.005, iz1 - iz0 + 0.01, 0.0025), [dx - 0.026, yy, (iz0 + iz1) / 2]));
+    if (future) door.glow.push(put(rb(0.005, 0.005, dlen * 0.86, 0.002), [dx - 0.044, by - 0.03, dzc]));
+    else door.metal.push(put(rb(0.006, 0.01, dlen * 0.8, 0.003), [dx - 0.046, by - 0.03, dzc]));
+    // armrest, sweeping up at the front into the door pull
+    const ay = L.consoleY + 0.04;
+    door.leather.push(put(rb(0.075, 0.045, 0.42, 0.02, 3), [dx - 0.05, ay, ez + 0.02]));
+    door.stitch.push(put(rb(0.003, 0.003, 0.38, 0.001), [dx - 0.087, ay + 0.012, ez + 0.02]));
+    door.dark.push(beam(new Vector3(dx - 0.055, ay + 0.01, ez + 0.2), new Vector3(dx - 0.04, by - 0.07, ez + 0.36), 0.045, 0.03, new Vector3(-1, 0, 0), 0.012));
+    // window switch pack on the armrest
+    door.dark.push(put(rb(0.05, 0.012, 0.08, 0.005), [dx - 0.052, ay + 0.026, ez + 0.13], [0.08, 0, 0]));
+    for (const zz of [0.11, 0.15]) door.chrome.push(put(rb(0.016, 0.008, 0.022, 0.003), [dx - 0.052, ay + 0.034, ez + zz], [0.08, 0, 0]));
+    // chrome release in a dark recess
+    door.dark.push(put(rb(0.012, 0.04, 0.13, 0.008), [dx - 0.022, by - 0.105, ez + 0.44]));
+    door.chrome.push(put(rb(0.016, 0.014, 0.09, 0.007), [dx - 0.03, by - 0.1, ez + 0.43], [0, 0, 0.12]));
+    // speaker: a perforated grille in a brushed ring
+    door.dark.push(put(new CylinderGeometry(0.072, 0.075, 0.016, 32), [dx - 0.02, fy + 0.14, ez + 0.48], [0, 0, Math.PI / 2]));
+    door.grille.push(put(new CylinderGeometry(0.064, 0.064, 0.008, 32), [dx - 0.029, fy + 0.14, ez + 0.48], [0, 0, Math.PI / 2]));
+    door.metal.push(put(ring(0.068, 0.005, 32, 6), [dx - 0.03, fy + 0.14, ez + 0.48], [0, Math.PI / 2, 0]));
+    // map pocket
+    door.dark.push(put(rb(0.03, 0.11, 0.3, 0.012), [dx - 0.03, fy + 0.11, ez + 0.1]));
+    door.soft.push(put(rb(0.012, 0.02, 0.3, 0.006), [dx - 0.046, fy + 0.165, ez + 0.1]));
   } else {
+    door.dark.push(put(rb(0.06, 0.03, dlen + 0.02, 0.014, 3), [dx - 0.012, by - 0.005, dzc]));
     // door pull strap and a bare release cable
     door.accent.push(put(rb(0.012, 0.025, 0.18, 0.004), [dx - 0.03, fy + 0.36, ez + 0.32], [0.3, 0, 0]));
     door.metal.push(rod([dx - 0.025, fy + 0.45, ez + 0.4], [dx - 0.025, fy + 0.42, ez + 0.6], 0.004, 6));
+    // riveted aluminium kick plate
+    door.metal.push(put(rb(0.006, 0.16, 0.5, 0.003), [dx - 0.022, fy + 0.13, ez + 0.3]));
+    for (let i = 0; i < 6; i++) door.chrome.push(put(new CylinderGeometry(0.004, 0.004, 0.004, 8), [dx - 0.026, fy + 0.2, ez + 0.08 + i * 0.088], [0, 0, Math.PI / 2]));
   }
   for (const k of Object.keys(door) as IBucket[]) for (const g of door[k]) b[k].push(...both(g));
+  if (race) {
+    // window net on the driver's side: webbing straps in a frame
+    const nx = f.halfW - 0.07;
+    const ny0 = by + 0.02;
+    const ny1 = Math.min(f.roofAt(ez) - 0.1, by + 0.2);
+    const nz0 = ez - 0.28;
+    const nz1 = ez + 0.12;
+    b.metal.push(rod([nx, ny1, nz0], [nx, ny1, nz1], 0.006, 8));
+    for (let i = 0; i <= 6; i++) {
+      const zz = nz0 + ((nz1 - nz0) * i) / 6;
+      b.dark.push(put(rb(0.004, ny1 - ny0, 0.012, 0.002), [nx, (ny0 + ny1) / 2, zz]));
+    }
+    for (let i = 0; i <= 3; i++) {
+      const yy = ny0 + ((ny1 - ny0) * i) / 3;
+      b.dark.push(put(rb(0.004, 0.012, nz1 - nz0, 0.002), [nx + 0.003, yy, (nz0 + nz1) / 2]));
+    }
+    b.accent.push(put(rb(0.006, 0.02, 0.05, 0.003), [nx - 0.004, ny1 - 0.02, nz1 - 0.03]));
+  }
 
-  // --- glasshouse trim: A-pillars, header, headliner, B-pillars, sun visors
+  // --- glasshouse trim: A-pillars with tweeters, B and C-pillars, padded visors, grab handle
   const roofF = f.roofAt(f.zRoofFront);
-  const aTrim = race ? b.dark : b.fabric;
+  const aTrim = race ? b.dark : b.headliner;
   for (const s of [-1, 1]) {
     const a0 = new Vector3(s * (f.halfW - 0.05), f.beltY - 0.01, f.zCowl - 0.04);
     const a1 = new Vector3(s * (f.roofW - 0.03), roofF - 0.05, f.zRoofFront + 0.01);
     aTrim.push(beam(a0, a1, 0.085, 0.035, new Vector3(-s, 0, -0.4), 0.014));
+    if (!race) {
+      // a tweeter at the foot of the pillar, facing the cabin
+      const tw = a0.clone().lerp(a1, 0.14).add(new Vector3(-s * 0.03, 0, -0.01));
+      const tn = new Vector3(-s, 0.2, -0.5).normalize();
+      b.dark.push(put(new CylinderGeometry(0.024, 0.026, 0.012, 20).rotateX(Math.PI / 2).applyMatrix4(faceBasis(tn, tw)), [0, 0, 0]));
+      b.grille.push(put(new CylinderGeometry(0.019, 0.019, 0.004, 20).rotateX(Math.PI / 2).applyMatrix4(faceBasis(tn, tw.clone().addScaledVector(tn, 0.006))), [0, 0, 0]));
+      b.metal.push(ring(0.021, 0.0025, 20, 6).applyMatrix4(faceBasis(tn, tw.clone().addScaledVector(tn, 0.007))));
+    }
     const bp0 = new Vector3(s * (f.halfW - 0.04), f.beltY - 0.01, f.zB);
     const bp1 = new Vector3(s * (f.roofW - 0.03), f.roofAt(f.zB) - 0.05, f.zB);
     aTrim.push(beam(bp0, bp1, 0.1, 0.04, new Vector3(-s, 0, 0), 0.014));
+    // seat-belt guide on the B-pillar
+    if (!race) b.dark.push(put(rb(0.02, 0.06, 0.05, 0.008), [s * (f.roofW - 0.06), f.roofAt(f.zB) - 0.13, f.zB + 0.03]));
     // C-pillar
     const c0 = new Vector3(s * (f.halfW - 0.05), f.beltY - 0.01, f.zRoofRear - 0.32);
     const c1 = new Vector3(s * (f.roofW - 0.03), f.roofAt(f.zRoofRear) - 0.05, f.zRoofRear + 0.02);
     aTrim.push(beam(c0, c1, 0.2, 0.04, new Vector3(-s, 0, 0), 0.02));
-    // sun visor folded up against the headliner
+    // padded sun visor folded up against the headliner, stitched round the edge
     if (!race) {
-      b.fabric.push(put(rb(0.34, 0.016, 0.16, 0.008), [s * 0.31, f.roofAt(f.zRoofFront - 0.12) - 0.065, f.zRoofFront - 0.12]));
-      b.chrome.push(put(new CylinderGeometry(0.005, 0.005, 0.03, 6), [s * 0.12, f.roofAt(f.zRoofFront - 0.06) - 0.065, f.zRoofFront - 0.06], [0, 0, Math.PI / 2]));
+      const vz = f.zRoofFront - 0.12;
+      const vy = f.roofAt(vz) - 0.052;
+      b.headliner.push(put(rb(0.34, 0.02, 0.16, 0.01, 3), [s * 0.31, vy, vz]));
+      b.stitch.push(put(rb(0.32, 0.003, 0.003, 0.001), [s * 0.31, vy - 0.01, vz + 0.068]));
+      b.dark.push(put(rb(0.02, 0.01, 0.03, 0.004), [s * 0.12, vy + 0.006, vz + 0.04]));
+      b.chrome.push(put(new CylinderGeometry(0.005, 0.005, 0.03, 6), [s * 0.47, f.roofAt(vz + 0.06) - 0.06, vz + 0.06], [0, 0, Math.PI / 2]));
     }
   }
-  b.fabric.push(put(rb(2 * f.roofW + 0.04, 0.05, 0.08, 0.02), [0, roofF - 0.045, f.zRoofFront - 0.02]));
+  if (!race) {
+    // grab handle over the passenger door
+    const gz = f.zB + 0.3;
+    const gx = -(f.roofW - 0.05);
+    const gy = f.roofAt(gz) - 0.07;
+    const pts = [new Vector3(gx + 0.002, gy + 0.03, gz - 0.11), new Vector3(gx + 0.03, gy - 0.02, gz - 0.07), new Vector3(gx + 0.035, gy - 0.025, gz + 0.07), new Vector3(gx + 0.002, gy + 0.03, gz + 0.11)];
+    b.dark.push(new TubeGeometry(new CatmullRomCurve3(pts), 24, 0.008, 8));
+  }
+  b.headliner.push(put(rb(2 * f.roofW + 0.04, 0.05, 0.08, 0.02), [0, roofF - 0.045, f.zRoofFront - 0.02]));
   // headliner: a gently domed sheet between the glass
-  const hl = new PlaneGeometry(2 * f.roofW, f.zRoofFront - f.zRoofRear + 0.1, 8, 10);
+  const hl = new PlaneGeometry(2 * f.roofW, f.zRoofFront - f.zRoofRear + 0.1, 12, 12);
   hl.rotateX(Math.PI / 2);
   const hp = hl.getAttribute('position');
   for (let i = 0; i < hp.count; i++) {
     const x = hp.getX(i);
-    const z = hp.getZ(i) + (f.zRoofFront + f.zRoofRear) / 2;
+    const z = Math.min(f.zRoofFront - 0.01, hp.getZ(i) + (f.zRoofFront + f.zRoofRear) / 2);
     hp.setZ(i, z);
     hp.setY(i, f.roofAt(z) - 0.035 - 0.05 * (x / f.roofW) ** 2);
   }
   hl.computeVertexNormals();
-  (race ? b.dark : b.fabric).push(hl);
+  b.headliner.push(hl);
+  if (!race) {
+    // two shallow seams running front to back
+    for (const x of [-0.24, 0.24]) {
+      const sz0 = f.zRoofRear + 0.05;
+      const sz1 = f.zRoofFront - 0.05;
+      const sm = (sz0 + sz1) / 2;
+      b.dark.push(put(rb(0.004, 0.004, sz1 - sz0, 0.0015), [x, f.roofAt(sm) - 0.035 - 0.05 * (x / f.roofW) ** 2 - 0.001, sm]));
+    }
+    // overhead console behind the mirror: map lights and switches
+    const oz = f.zRoofFront - 0.13;
+    const oy = f.roofAt(oz) - 0.05;
+    b.dark.push(put(rb(0.2, 0.03, 0.13, 0.012, 3), [0, oy, oz], [-0.06, 0, 0]));
+    for (const x of [-0.055, 0.055]) b.glow.push(put(rb(0.045, 0.004, 0.028, 0.002), [x, oy - 0.016, oz - 0.01], [-0.06, 0, 0]));
+    for (const x of [-0.016, 0.016]) b.chrome.push(put(rb(0.018, 0.006, 0.014, 0.002), [x, oy - 0.016, oz + 0.035], [-0.06, 0, 0]));
+  }
   // dome light
   b.glow.push(put(rb(0.1, 0.006, 0.05, 0.003), [0, f.roofAt(f.zB + 0.15) - 0.042, f.zB + 0.15]));
 
@@ -560,7 +723,22 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
       const d3 = new Vector3(s * (f.halfW - 0.1), fy + 0.12, zf + 0.12);
       b.accent.push(rod(d0, d1, r * 0.85), rod(d2, d3, r * 0.85));
       // foam padding on the bar by the driver's head
-      if (s > 0) b.dark.push(rod(aMid.clone().lerp(aTop, 0.25), aMid.clone().lerp(aTop, 0.75), r * 1.9, 10));
+      // (on narrow canopies the bar crosses the view over the bonnet: pad only what stays under it)
+      if (s > 0) {
+        for (const [t0, t1] of [[0.25, 0.75], [0.1, 0.4]]) {
+          const pad = rod(aMid.clone().lerp(aTop, t0), aMid.clone().lerp(aTop, t1), r * 1.9, 10);
+          const pp = pad.getAttribute('position');
+          let clear = true;
+          for (let i = 0; i < pp.count && clear; i++) {
+            const z = pp.getZ(i);
+            if (z > ez + 0.15 && Math.abs(pp.getX(i) - L.driverX) < 0.15 && pp.getY(i) > L.sightAt(z) - 0.004) clear = false;
+          }
+          if (clear) {
+            b.dark.push(pad);
+            break;
+          }
+        }
+      }
     }
     const tl = new Vector3(f.roofW - 0.05, topY(cz), cz);
     const tr = new Vector3(-(f.roofW - 0.05), topY(cz), cz);
@@ -643,15 +821,19 @@ export function dashPart(build: CarBuild, L: CockpitLayout): DashGeo {
   } else if (build.dash === 'digital') {
     // a wide floating glass panel: driver display + centre screen in one slab
     const w = 0.62;
-    const c = new Vector3(L.driverX - 0.16, t + 0.075, zf + 0.05);
+    // standing proud of the dash face, seen through the top of the wheel like the dials
+    const cz = zf + 0.03;
+    const e = L.eye;
+    const cy = e.y + ((cl.y - e.y) * (cz - e.z)) / (cl.z - e.z);
+    const c = new Vector3(L.driverX - 0.16, Math.min(cy + 0.01, L.sightAt(cz) - 0.07), cz);
     const n = L.eye.clone().sub(new Vector3(L.driverX, c.y, c.z)).normalize();
     n.x *= 0.3;
     n.normalize();
-    b.dark.push(screenFrame(c, w + 0.02, 0.15, n));
-    screens.push(screenQuad(c.clone().addScaledVector(n, 0.009).add(new Vector3(0.155, 0, 0)), 0.3, 0.13, n, UV_CLUSTER));
-    screens.push(screenQuad(c.clone().addScaledVector(n, 0.009).add(new Vector3(-0.155, 0, 0)), 0.29, 0.13, n, UV_CENTER));
-    // slim stalk holding it
-    b.metal.push(put(rb(0.06, 0.07, 0.02, 0.008), [c.x, t + 0.01, c.z + 0.04], [0.4, 0, 0]));
+    b.dark.push(screenFrame(c, w + 0.02, 0.14, n));
+    screens.push(screenQuad(c.clone().addScaledVector(n, 0.009).add(new Vector3(0.155, 0, 0)), 0.29, 0.122, n, UV_CLUSTER));
+    screens.push(screenQuad(c.clone().addScaledVector(n, 0.009).add(new Vector3(-0.155, 0, 0)), 0.28, 0.122, n, UV_CENTER));
+    // slim brushed mounts holding it off the dash face
+    for (const dx of [-0.2, 0.2]) b.metal.push(put(rb(0.04, 0.05, 0.07, 0.008), [c.x + dx, c.y - 0.02, c.z + 0.045], [0.2, 0, 0]));
     // haptic climate bar below the vents
     b.glow.push(put(rb(0.2, 0.004, 0.004, 0.001), [0, t - 0.2, zf + 0.04]));
   } else {
@@ -910,8 +1092,8 @@ export function mirrorPart(id: string): MirrorGeo {
   else housing.push(put(rb(w + 0.02, h + 0.02, 0.035, h * 0.45, 4), [0, 0, -0.016]));
   if (id === 'wide') b.chrome.push(put(rb(w + 0.006, 0.003, 0.004, 0.001), [0, -h / 2 - 0.006, 0.002]));
   // stem up to the headliner
-  b.dark.push(rod([0, h / 2, -0.03], [0, h / 2 + 0.07, -0.05], 0.007, 8));
-  b.dark.push(put(rb(0.05, 0.016, 0.05, 0.008), [0, h / 2 + 0.075, -0.05]));
+  b.dark.push(rod([0, h / 2, -0.03], [0, h / 2 + 0.04, -0.045], 0.007, 8));
+  b.dark.push(put(rb(0.05, 0.014, 0.05, 0.007), [0, h / 2 + 0.046, -0.045]));
   const glass = new PlaneGeometry(w, h);
   // flip u: a mirror shows the scene back to front
   const uv = glass.getAttribute('uv');

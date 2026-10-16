@@ -107,8 +107,8 @@ export function bodySections(id: string): BodyInfo {
         cabin: [
           { z: 1.14, roof: 0.7, beltW: 0.8, roofW: 0.7 },
           { z: 0.72, roof: 0.95, beltW: 0.8, roofW: 0.6 },
-          { z: 0.36, roof: 1.05, beltW: 0.78, roofW: 0.54 },
-          { z: -0.26, roof: 1.06, beltW: 0.77, roofW: 0.54 },
+          { z: 0.36, roof: 1.05, beltW: 0.78, roofW: 0.59 },
+          { z: -0.26, roof: 1.06, beltW: 0.77, roofW: 0.56 },
           { z: -0.66, roof: 0.99, beltW: 0.75, roofW: 0.58 },
           { z: -0.96, roof: 0.95, beltW: 0.72, roofW: 0.62 },
         ],
