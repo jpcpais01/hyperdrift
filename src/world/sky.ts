@@ -66,7 +66,7 @@ const skyFrag = /* glsl */ `
       vec2 uv = d.xz / (h + 0.1) * 0.9 + vec2(uTime * 0.003, 0.0);
       float n = fbm(uv * 1.7, 4);
       float cir = smoothstep(0.5, 0.82, n) * smoothstep(0.0, 0.12, h) * (1.0 - smoothstep(0.5, 0.95, h));
-      vec3 cc = mix(vec3(0.85, 0.66, 0.78), ATM_SUN_COL * 2.4, pow(c * 0.5 + 0.5, 6.0));
+      vec3 cc = mix(vec3(0.85, 0.66, 0.78), ATM_SUN_COL * 2.4, pow(clamp(c * 0.5 + 0.5, 0.0, 1.0), 6.0));
       col = mix(col, cc, cir * 0.6);
       col += atmSun(d) * (1.0 - cir * 0.8);
     } else {

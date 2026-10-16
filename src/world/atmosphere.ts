@@ -14,6 +14,8 @@ const v3 = (v: Vector3) => `vec3(${v.x.toFixed(5)}, ${v.y.toFixed(5)}, ${v.z.toF
  * All colours are linear HDR (tone mapped later by the output pass).
  */
 export const ATMOSPHERE_GLSL = /* glsl */ `
+  // the rounded literal is a hair longer than 1, so dot(d, ATM_SUN) can pass 1.0 at the
+  // sun: every use below clamps it, since pow() of a negative base is NaN on Windows/D3D
   const vec3 ATM_SUN = ${v3(SUN_DIR)};
   const vec3 ATM_SUN_COL = vec3(1.0, 0.72, 0.46);
 
@@ -25,8 +27,8 @@ export const ATMOSPHERE_GLSL = /* glsl */ `
 
   // Colour of the haze seen along direction d, near the horizon.
   vec3 atmHaze(vec3 d) {
-    float c = dot(d, ATM_SUN);
-    float toward = pow(c * 0.5 + 0.5, 2.5);
+    float c = clamp(dot(d, ATM_SUN), -1.0, 1.0);
+    float toward = pow(max(c * 0.5 + 0.5, 0.0), 2.5);
     vec3 away = vec3(0.50, 0.50, 0.74);
     vec3 near = vec3(1.05, 0.66, 0.45);
     vec3 col = mix(away, near, toward);
@@ -54,9 +56,12 @@ export const ATMOSPHERE_GLSL = /* glsl */ `
 
   // Sun disc with limb darkening plus a tight bloom halo.
   vec3 atmSun(vec3 d) {
-    float c = dot(d, ATM_SUN);
+    float c = clamp(dot(d, ATM_SUN), -1.0, 1.0);
     float disc = smoothstep(0.99955, 0.99975, c);
-    float limb = sqrt(max(0.0, 1.0 - pow((1.0 - c) / 0.00045, 2.0)));
+    // no pow() here: pow(x, 2.0) of a negative x is NaN on D3D, and one NaN pixel
+    // at the sun was smeared by the bloom into a huge dark block over the screen
+    float r = (1.0 - c) / 0.00045;
+    float limb = sqrt(max(0.0, 1.0 - r * r));
     vec3 s = vec3(26.0, 20.0, 13.0) * disc * (0.55 + 0.45 * limb);
     s += ATM_SUN_COL * pow(max(c, 0.0), 400.0) * 3.0;
     return s;

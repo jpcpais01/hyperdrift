@@ -145,7 +145,7 @@ vec4 vinyl(vec3 p, vec3 n, vec3 base) {
     float t = 2.3 - p.z;
     float a2 = isSide ? p.y : ax * 0.8 + 0.25;
     float wave = abs(sin(a2 * 22.0)) * 0.55 + abs(sin(a2 * 47.0 + 1.3)) * 0.25 + 0.2 * sin(a2 * 9.0 + 2.0);
-    float L = 0.45 + 0.75 * pow(wave, 2.5);
+    float L = 0.45 + 0.75 * pow(max(wave, 0.0), 2.5);
     float region = isSide ? smoothstep(0.3, 0.38, p.y) * (1.0 - smoothstep(0.8, 0.88, p.y)) : step(0.6, p.y);
     float d = L - t;
     m = edgeIn(d) * region;
