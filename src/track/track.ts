@@ -86,9 +86,13 @@ export class Track {
   readonly closureError: number;
   readonly closureVector: Vector3;
 
-  constructor(defs: SegmentDef[], start = new Vector3(0, 120, 0)) {
+  /**
+   * @param defs the lap's segments; `defs.heading` (degrees) turns the whole lap
+   *   about the start, which sets where the sun sits along it
+   */
+  constructor(defs: SegmentDef[] & { heading?: number }, start = new Vector3(0, 120, 0), heading = defs.heading ?? 0) {
     const ds = 1;
-    let yaw = 0;
+    let yaw = heading * DEG;
     let pitch = 0;
     let bank = 0;
     const pos = start.clone();

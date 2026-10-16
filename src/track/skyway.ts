@@ -12,7 +12,7 @@ import type { SegmentDef } from './track';
  * so the lap meets itself, and scripts/trackcheck.ts keeps every part of the
  * lap clear of every other (the helix passes ~35 m over its own entry).
  */
-export const SKYWAY: SegmentDef[] = [
+export const SKYWAY: SegmentDef[] & { heading?: number } = [
   // start / finish straight
   { len: 208, mark: 'start' },
   // T1: fast right kink
@@ -66,3 +66,6 @@ export const SKYWAY: SegmentDef[] = [
   { len: 37, bank: 0 },
   { len: 120 },
 ];
+// Turned so the long run through the jump, loop and light tunnel has the low sun
+// off to the side instead of dead ahead, and the run home has it behind.
+SKYWAY.heading = 70;
