@@ -6,6 +6,12 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-16 19:00 UTC',
+    entries: [
+      "Cockpit view: press C (or the camera button) until you're in the driver's seat. Your gloved hands steer the wheel, reach for the gear lever on every shift and yank the handbrake when you start a drift, the gauges are live, the rear-view mirror really shows who's behind you, and sunlight falls in through the glass. Build the interior in the garage's new INTERIOR tab: cabin style (GT leather, stripped racer with a roll cage in your paint colour, or futuristic with light strips) and leather colour, dashboard, steering wheel, mirror, gear lever and handbrake, 3 of each, and the camera sits you inside to show each part working.",
+    ],
+  },
+  {
     hour: '2026-10-16 18:00 UTC',
     entries: [
       'Garage camera: drag anywhere on your car to orbit all the way around it and look from above or down low, flick to let it glide, pinch (or use the mouse wheel / trackpad) to zoom in on the details, and double-tap to glide back. Leave it alone for a few seconds and the turntable starts spinning again.',

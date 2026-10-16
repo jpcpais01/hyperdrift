@@ -136,6 +136,7 @@ class App {
       this.garageScene.setBuild(b);
       this.garageScene.preview(b, slot);
     };
+    this.garage.onView = (interior, slot) => this.garageScene.setView(interior, slot);
     this.garage.onBack = () => this.go('menu');
     this.garage.onRace = () => this.startRace(this.raceMode === 'attract' ? 'race' : this.raceMode);
     this.results.onAgain = () => this.startRace(this.raceMode);
@@ -148,7 +149,7 @@ class App {
     this.input.onPause = togglePause;
     const cycleCamera = () => {
       if (this.state !== 'race' || !this.race || this.race.paused) return;
-      this.settings.camZoom = ((this.settings.camZoom + 1) % 3) as CameraZoom;
+      this.settings.camZoom = ((this.settings.camZoom + 1) % 4) as CameraZoom;
       storage.saveSettings(this.settings);
       this.race.setCameraZoom(this.settings.camZoom);
       this.hud.setCameraZoom(this.settings.camZoom, `CÂMARA · ${CAMERA_ZOOM_LABELS[this.settings.camZoom]}`);
@@ -195,6 +196,7 @@ class App {
 
   private go(state: State) {
     this.endRace();
+    this.renderer.setOverlay(null);
     this.garageScene.stopPreview();
     this.state = state;
     this.menu.show(state === 'menu');
@@ -220,6 +222,7 @@ class App {
 
   private startRace(mode: RaceMode) {
     this.endRace();
+    this.renderer.setOverlay(null);
     this.garageScene.stopPreview();
     this.raceMode = mode;
     this.state = 'race';
@@ -262,6 +265,8 @@ class App {
     if (this.state === 'garage') {
       const panel = window.innerWidth > 900 ? 1.7 : 2.0;
       this.garageScene.update(dt, this.time, this.renderer.camera, this.sky, isPortrait() ? 0 : panel);
+      this.renderer.setOverlay(this.garageScene.overlay);
+      this.garageScene.renderMirror(this.renderer.gl);
     } else if (this.race) {
       this.race.update(needRotate ? 0 : dt, this.renderer);
     }

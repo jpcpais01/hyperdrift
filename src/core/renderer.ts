@@ -13,6 +13,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { SUN_DIR } from '../world/atmosphere';
 
@@ -129,6 +130,31 @@ const FinalShader = {
   `,
 };
 
+/**
+ * Draws a second, small scene over the world after clearing depth: the
+ * cockpit interior. Its own camera has a tiny near plane, so the dash can sit
+ * centimetres from the eye while the world keeps its depth precision.
+ */
+class OverlayPass extends Pass {
+  scene: Scene | null = null;
+  readonly camera = new PerspectiveCamera(60, 1, 0.012, 12);
+
+  constructor() {
+    super();
+    this.needsSwap = false;
+  }
+
+  render(renderer: WebGLRenderer, _write: WebGLRenderTarget, read: WebGLRenderTarget) {
+    if (!this.scene) return;
+    const autoClear = renderer.autoClear;
+    renderer.autoClear = false;
+    renderer.setRenderTarget(this.renderToScreen ? null : read);
+    renderer.clearDepth();
+    renderer.render(this.scene, this.camera);
+    renderer.autoClear = autoClear;
+  }
+}
+
 /** Phones/tablets and weak CPUs get the cheap path (no real-time shadows, fewer noise octaves). */
 export function detectLowEnd(): boolean {
   if (typeof window === 'undefined') return true;
@@ -142,6 +168,7 @@ export class Renderer {
   scene: Scene;
   private composer: EffectComposer;
   private renderPass: RenderPass;
+  private overlay = new OverlayPass();
   private bloom: UnrealBloomPass;
   private speed: ShaderPass;
   private sunNdc = new Vector3();
@@ -168,6 +195,8 @@ export class Renderer {
     this.composer = new EffectComposer(this.gl, rt);
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
+    this.overlay.enabled = false;
+    this.composer.addPass(this.overlay);
     this.bloom = new UnrealBloomPass(new Vector2(256, 256), 0.32, 0.45, 1.3);
     // sanitize what the bloom reads, so a bad pixel can never spread across the screen
     const hp = this.bloom.materialHighPassFilter;
@@ -188,6 +217,12 @@ export class Renderer {
   setScene(scene: Scene) {
     this.scene = scene;
     this.renderPass.scene = scene;
+  }
+
+  /** A scene drawn on top of the world from the same viewpoint (the cockpit), or null. */
+  setOverlay(scene: Scene | null) {
+    this.overlay.scene = scene;
+    this.overlay.enabled = !!scene;
   }
 
   resize() {
@@ -242,6 +277,18 @@ export class Renderer {
   render(dt: number) {
     if (dt > 0 && dt < 0.25) this.adapt(dt);
     this.camera.updateMatrixWorld();
+    if (this.overlay.enabled) {
+      const oc = this.overlay.camera;
+      oc.matrixWorld.copy(this.camera.matrixWorld);
+      oc.matrixWorldInverse.copy(this.camera.matrixWorldInverse);
+      oc.matrixAutoUpdate = false;
+      oc.matrixWorldAutoUpdate = false;
+      if (oc.fov !== this.camera.fov || oc.aspect !== this.camera.aspect) {
+        oc.fov = this.camera.fov;
+        oc.aspect = this.camera.aspect;
+        oc.updateProjectionMatrix();
+      }
+    }
     this.updateSun();
     this.composer.render(dt);
   }

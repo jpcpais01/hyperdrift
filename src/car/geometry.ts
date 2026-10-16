@@ -1330,3 +1330,65 @@ function mergeList(list: BufferGeometry[]): BufferGeometry {
   out.setAttribute('normal', new BufferAttribute(nrm, 3));
   return out;
 }
+
+// ---------------------------------------------------------------- cabin frame (for the interior)
+
+/** Where the cabin's glass and roof are, so the interior can be fitted inside any body. Car space. */
+export interface CabinFrame {
+  /** windscreen base (cowl) */
+  zCowl: number;
+  /** windscreen top, where the solid roof starts */
+  zRoofFront: number;
+  /** rear glass top, where the solid roof ends */
+  zRoofRear: number;
+  /** the back of the glasshouse */
+  zBack: number;
+  /** B-pillar */
+  zB: number;
+  roofY: number;
+  beltY: number;
+  /** glass half width at the belt line and at the roof edge */
+  halfW: number;
+  roofW: number;
+  roofAt(z: number): number;
+}
+
+export function cabinFrame(bodyId: string): CabinFrame {
+  const keys = cabinKeys(bodyId);
+  const secs: Section[] = keys
+    .slice()
+    .reverse()
+    .map((k) => ({ z: k.z, yb: 0.78, wb: k.beltW - 0.04, ys: k.belt, ws: k.beltW, yt: Math.max(k.roof, k.belt + 0.01), wt: k.roofW, crisp: 0.55 }));
+  const fine = refine(secs, 8);
+  const zFront = keys[0].z;
+  const zBack = keys[keys.length - 1].z;
+  const roofMax = Math.max(...keys.map((k) => k.roof));
+  const roofAt = (z: number) => sectionAt(fine, Math.max(zBack, Math.min(zFront, z))).yt;
+  let zWs = zFront;
+  for (let z = zFront; z > zBack; z -= 0.01) {
+    if (roofAt(z) > roofMax - 0.05) {
+      zWs = z;
+      break;
+    }
+  }
+  let zRg = zBack;
+  for (let z = zBack; z < zFront; z += 0.01) {
+    if (roofAt(z) > roofMax - 0.05) {
+      zRg = z;
+      break;
+    }
+  }
+  const zSideBack = zRg - (zRg - zBack) * 0.35;
+  return {
+    zCowl: zFront,
+    zRoofFront: zWs,
+    zRoofRear: zRg,
+    zBack,
+    zB: zWs + (zSideBack - zWs) * 0.48,
+    roofY: roofMax,
+    beltY: keys[1].belt,
+    halfW: Math.min(...keys.slice(0, 4).map((k) => k.beltW)),
+    roofW: Math.min(...keys.slice(1, 4).map((k) => k.roofW)),
+    roofAt,
+  };
+}

@@ -54,7 +54,7 @@ export const storage = {
       tiltCenter: 0,
       ...(get<Partial<Settings>>(KEY_SETTINGS) ?? {}),
     };
-    if (s.camZoom !== 0 && s.camZoom !== 1 && s.camZoom !== 2) s.camZoom = 1;
+    if (s.camZoom !== 0 && s.camZoom !== 1 && s.camZoom !== 2 && s.camZoom !== 3) s.camZoom = 1;
     if (s.controls !== 'buttons' && s.controls !== 'tilt') s.controls = 'buttons';
     if (s.tiltSens !== 0 && s.tiltSens !== 1 && s.tiltSens !== 2) s.tiltSens = 1;
     if (typeof s.tiltCenter !== 'number' || !isFinite(s.tiltCenter) || Math.abs(s.tiltCenter) > 1.2) s.tiltCenter = 0;

@@ -8,9 +8,13 @@ import {
   MeshStandardMaterial,
   RingGeometry,
   Scene,
+  Matrix4,
   Vector3,
   type PerspectiveCamera,
+  type WebGLRenderer,
 } from 'three';
+import { Cockpit, IDLE_DRIVE, type CockpitDrive } from '../car/cockpit';
+import { detectLowEnd } from '../core/renderer';
 import { engineProfile } from '../audio/engineProfile';
 import { buildCar, type CarVisual } from '../car/carBuilder';
 import type { CarBuild, Slot } from '../car/parts';
@@ -56,6 +60,15 @@ export class GarageScene {
   private spin = 0;
   private orbit = new GarageOrbit();
   private demo: { t: number; nitro: boolean; dt: Drivetrain; nitroFx: number; lit: boolean } | null = null;
+  private cockpit: Cockpit | null = null;
+  /** looking at the interior parts from inside the car */
+  private interior = false;
+  private focus: Slot = 'cockpit';
+  private shotPos = new Vector3();
+  private shotLook = new Vector3();
+  private shotFresh = true;
+  private demoT = 0;
+  private lowEnd = detectLowEnd();
 
   constructor(private readonly sky: Sky) {
     sky.addTo(this.scene);
@@ -86,6 +99,100 @@ export class GarageScene {
     this.car = buildCar(build);
     this.sky.castShadows(this.car.root);
     this.turntable.add(this.car.root);
+    this.cockpit?.dispose();
+    this.cockpit = new Cockpit(build, this.lowEnd, this.sky.envMap);
+  }
+
+  /** Switches between the turntable and the driver's seat, framing the part being edited. */
+  setView(interior: boolean, slot: Slot) {
+    if (interior !== this.interior) {
+      this.shotFresh = true;
+      this.orbit.resetNow();
+    } else if (slot !== this.focus) this.orbit.resetSoft();
+    this.interior = interior;
+    if (slot !== this.focus) this.demoT = 0;
+    this.focus = slot;
+  }
+
+  /** The cockpit scene to draw over the world, when the camera is inside. */
+  get overlay() {
+    return this.interior && this.cockpit ? this.cockpit.scene : null;
+  }
+
+  renderMirror(gl: WebGLRenderer) {
+    if (this.interior) this.cockpit?.renderMirror(gl, this.scene);
+  }
+
+  /** Camera shot (car space) for each interior part. */
+  private shot(slot: Slot, pos: Vector3, look: Vector3) {
+    const L = this.cockpit!.layout;
+    const E = L.eye;
+    switch (slot) {
+      case 'dash':
+        pos.copy(E).add(V(-0.05, 0.0, 0.06));
+        look.copy(L.cluster).add(V(-0.08, 0, 0));
+        break;
+      case 'wheel':
+        pos.copy(E).add(V(-0.03, -0.02, 0.1));
+        look.copy(L.wheel);
+        break;
+      case 'mirror':
+        pos.copy(E).add(V(-0.1, -0.03, 0.08));
+        look.copy(L.mirror);
+        break;
+      case 'shifter':
+        // from the passenger seat, so the driver's arm is behind the lever, not in front of it
+        pos.set(L.shifter.x - 0.36, E.y - 0.1, L.shifter.z - 0.05);
+        look.copy(L.shifter).add(V(0, 0.1, 0));
+        break;
+      case 'handbrake':
+        pos.set(L.handbrake.x - 0.38, E.y - 0.08, L.handbrake.z - 0.02);
+        look.copy(L.handbrake).add(V(0, 0.1, 0.06));
+        break;
+      case 'cabinColor':
+        pos.set(E.x - 0.12, E.y + 0.02, E.z + 0.5);
+        look.set(-L.driverX, 0.62, L.seatZ - 0.12);
+        break;
+      default:
+        pos.set(0.0, E.y + 0.07, E.z - 0.42);
+        look.set(0.12, L.dashTop - 0.08, L.zFace + 0.1);
+    }
+  }
+
+  /** Little demos of what the selected part does: gauge sweep, steering, shifting, handbrake. */
+  private demoDrive(dt: number): CockpitDrive {
+    this.demoT += dt;
+    const t = this.demoT;
+    const d: CockpitDrive = { ...IDLE_DRIVE, rpm: 0.13 + Math.sin(t * 9) * 0.005, steer: Math.sin(t * 0.7) * 0.04 };
+    if (!this.interior) return d;
+    switch (this.focus) {
+      case 'dash': {
+        const c = (t % 4) / 2.4;
+        const k = c < 1 ? Math.sin(c * Math.PI) : 0;
+        d.rpm = Math.max(d.rpm, k);
+        d.speed = k * 300 / 3.6;
+        d.gear = Math.min(5, Math.floor(k * 6));
+        d.limiter = k > 0.97;
+        d.latAccel = Math.sin(t * 1.3) * 12;
+        d.nitroActive = k > 0.6;
+        break;
+      }
+      case 'wheel':
+        d.steer = Math.sin(t * 1.2) * 0.5;
+        break;
+      case 'shifter': {
+        const g = Math.floor(t / 1.6) % 7;
+        d.gear = Math.min(5, g);
+        d.rpm = 0.45 + ((t % 1.6) / 1.6) * 0.5;
+        d.speed = 4 + d.gear * 8;
+        break;
+      }
+      case 'handbrake':
+        d.drifting = t % 2.4 > 0.5 && t % 2.4 < 1.1;
+        d.steer = d.drifting ? 0.2 : 0;
+        break;
+    }
+    return d;
   }
 
   /**
@@ -144,6 +251,10 @@ export class GarageScene {
   update(dt: number, time: number, camera: PerspectiveCamera, sky: Sky, viewOffset = 0) {
     const o = this.orbit;
     o.update(dt);
+    if (this.interior && this.car && this.cockpit) {
+      this.updateInterior(dt, time, camera, sky, viewOffset);
+      return;
+    }
     // the turntable keeps showing the car off whenever the player isn't orbiting
     this.spin += ((o.idle > 3 ? 0.35 : 0) - this.spin) * (1 - Math.exp(-1.2 * dt));
     this.angle += this.spin * dt;
@@ -173,7 +284,44 @@ export class GarageScene {
     sky.update(time, camera.position, -80, ORIGIN);
     this.scene.fog = null;
   }
+
+  private updateInterior(dt: number, time: number, camera: PerspectiveCamera, sky: Sky, viewOffset: number) {
+    const o = this.orbit;
+    const cockpit = this.cockpit!;
+    // the turntable settles while you sit inside
+    this.spin += (0 - this.spin) * (1 - Math.exp(-3 * dt));
+    this.angle += this.spin * dt;
+    this.turntable.rotation.y = this.angle;
+    this.shot(this.focus, _a, _b);
+    const e = this.shotFresh ? 1 : 1 - Math.exp(-5 * dt);
+    this.shotFresh = false;
+    this.shotPos.lerp(_a, e);
+    this.shotLook.lerp(_b, e);
+    this.car!.body.updateWorldMatrix(true, false);
+    cockpit.follow(this.car!.body);
+    const m = this.car!.body.matrixWorld;
+    camera.position.copy(this.shotPos).applyMatrix4(m);
+    // drag to look around; the parts panel covers the right, so the subject sits left of centre
+    const dir = _b.copy(this.shotLook).sub(this.shotPos).normalize();
+    const yaw = Math.atan2(dir.x, dir.z) - o.yaw * 0.8 - viewOffset * 0.07;
+    const pitch = Math.max(-1.2, Math.min(1.0, Math.asin(Math.max(-1, Math.min(1, dir.y))) - o.pitch * 0.8));
+    if (Math.abs(o.pitch) > 1.4) o.pitch = Math.sign(o.pitch) * 1.4;
+    const look = _a.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)).add(this.shotPos).applyMatrix4(m);
+    camera.up.set(0, 1, 0).transformDirection(_m.extractRotation(m));
+    camera.lookAt(look);
+    camera.fov = Math.max(34, Math.min(84, 62 * o.zoom));
+    camera.updateProjectionMatrix();
+    cockpit.update(dt, this.demoDrive(dt));
+    this.updatePreview(dt, time);
+    sky.update(time, camera.position, -80, ORIGIN);
+    this.scene.fog = null;
+  }
 }
+
+const V = (x: number, y: number, z: number) => new Vector3(x, y, z);
+const _m = new Matrix4();
+const _a = new Vector3();
+const _b = new Vector3();
 
 const ZOOM_MIN = 0.55;
 const ZOOM_MAX = 1.6;
@@ -302,6 +450,18 @@ class GarageOrbit {
   private touch() {
     this.idle = 0;
     document.querySelector('.garage-hint')?.classList.add('used');
+  }
+
+  /** jump straight back to the default view */
+  resetNow() {
+    this.yaw = this.pitch = this.yawVel = this.pitchVel = 0;
+    this.zoom = this.zoomTarget = 1;
+    this.resetting = false;
+  }
+
+  /** glide back to the default view */
+  resetSoft() {
+    this.reset();
   }
 
   private reset() {
