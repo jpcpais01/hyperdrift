@@ -1,7 +1,7 @@
 import { AdditiveBlending, BoxGeometry, Color, Mesh, PlaneGeometry, ShaderMaterial, type BufferGeometry } from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { paintById, underglowColorById, type CarBuild } from './parts';
-import { SKELETON } from './skeleton';
+import { skeletonFor, type Skeleton } from './skeleton';
 
 /**
  * Underglow: LED tubes tucked under the sills and bumpers, and the light they
@@ -126,21 +126,23 @@ const POOL_FRAG = /* glsl */ `
 `;
 
 /** Tubes: one along each sill between the arches, one behind the nose, one under the tail. */
-function stripGeometry(front: number, back: number): BufferGeometry {
-  const y = 0.19;
+function stripGeometry(K: Skeleton, front: number, back: number): BufferGeometry {
+  // under the body's own floor, just inside the tyres' inner faces
+  const y = 0.19 + K.lift;
   const t = 0.035;
-  const x = SKELETON.skirtX - 0.08;
-  const zf = Math.min(front - 0.45, SKELETON.frontAxleZ + 0.5);
-  const zb = Math.max(-back + 0.45, SKELETON.rearAxleZ - 0.5);
+  const x = Math.min(K.front.x - K.front.width / 2, K.rear.x - K.rear.width / 2) + 0.01;
+  const zf = Math.min(front - 0.45, K.front.z + 0.5);
+  const zb = Math.max(-back + 0.45, K.rear.z - 0.5);
   const parts: BufferGeometry[] = [];
   const add = (w: number, l: number, px: number, pz: number) => {
     const g = new BoxGeometry(w, t, l);
     g.translate(px, y, pz);
     parts.push(g);
   };
-  const sideLen = SKELETON.skirtZ[1] - SKELETON.skirtZ[0] + 0.1;
-  add(t, sideLen, x, 0);
-  add(t, sideLen, -x, 0);
+  const sideLen = K.skirtZ[1] - K.skirtZ[0] + 0.1;
+  const sideZ = (K.skirtZ[0] + K.skirtZ[1]) / 2;
+  add(t, sideLen, x, sideZ);
+  add(t, sideLen, -x, sideZ);
   add(1.2, t, 0, zf);
   add(1.2, t, 0, zb);
   const merged = mergeGeometries(parts, false)!;
@@ -192,7 +194,7 @@ export class Underglow {
     });
 
     this.stripMat = new ShaderMaterial({ vertexShader: STRIP_VERT, fragmentShader: STRIP_FRAG, uniforms: { ...shared(), uMid: { value: midZ } } });
-    this.strips = new Mesh(stripGeometry(hitbox.front, hitbox.back), this.stripMat);
+    this.strips = new Mesh(stripGeometry(skeletonFor(build.body), hitbox.front, hitbox.back), this.stripMat);
 
     const qx = half.x + 1.7;
     const qz = half.z + 1.7;

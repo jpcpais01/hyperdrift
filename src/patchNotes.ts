@@ -14,6 +14,9 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      "Cockpit view: the driver now sits lower in the seat, for a more natural, sporty eye line that still keeps the road in full view over the dashboard.",
+      "Three new car bodies with their own proportions: the compact Hot Hatch (short wheelbase, tall boxy cabin, rear wiper), the lifted Rally Raid (high ride, chunky tall-sidewall tyres, black arch cladding and roof rails) and the long, wide Protótipo (low tub between tall wheel pods, bubble canopy and a shark fin). Every body now sets its own wheelbase, track, wheel size, ride height, overhangs and roof line, so they look and sit very differently, and any mix of parts still fits.",
+      'New parts in the garage: Tubarão and Rally fronts (with a spot-lamp pod), Quadrada and Jato rears, Persianas and Bossas hoods, mud flaps, a roof spoiler and the option to run without skirts or a wing, Prato fundo, Rally and Lâminas rims, Matriz LED and pop-up headlights, and Trapezoidal and Séxtupla exhausts.',
       'Underglow! A new NÉON category in the garage puts LED tubes under your car that pour coloured light onto the road, with 5 effects: steady Néon, a heartbeat Pulsar, Cometas that chase each other round the car, a flowing Arco-íris, and Reativo, which brightens and speeds up with your speed, flickers in drifts and burns white-hot on nitro. Pick from 10 colours (or your paint colour); the glow fades softly at the edges, lifts off the road on jumps, and shows on AI rivals and online cars too.',
     ],
   },

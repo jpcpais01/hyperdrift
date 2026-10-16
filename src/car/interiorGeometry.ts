@@ -289,7 +289,7 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const driverX = Math.min(0.37, f.halfW * 0.48);
   const ez = f.zRoofFront - 0.39;
   // sit as tall as the headroom allows: the road over the bonnet is what matters
-  const ey = Math.min(f.roofAt(ez) - 0.13, Math.max(f.beltY + 0.15, f.roofY - 0.16));
+  const ey = Math.min(f.roofAt(ez) - 0.18, Math.max(f.beltY + 0.1, f.roofY - 0.21));
   const eye = new Vector3(driverX, ey, ez);
   // the line from the eye over the base of the windscreen: nothing in the cabin may poke above it
   const cowlY = Math.min(f.beltY, f.roofAt(f.zCowl));
@@ -304,12 +304,12 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const clusterZ = zFace - 0.03;
   const through = wheelY + 0.125;
   const clusterY = ey + ((through - ey) * (clusterZ - ez)) / (wz - ez);
-  const consoleY = 0.6;
+  const consoleY = f.floorY + 0.3;
   return {
     frame: f,
     eye,
     driverX,
-    floorY: 0.3,
+    floorY: f.floorY,
     dashTop,
     zFace,
     cowlY,
@@ -486,10 +486,16 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
   // the digital dash floats its own screen above the dash instead
   if (build.dash !== 'digital') {
     const hoodMat = race ? b.carbon : style === 'gt' ? b.leather : b.dark;
-    hoodMat.push(put(hood, [cl.x, cl.y + 0.079, cl.z]));
+    put(hood, [cl.x, cl.y + 0.079, cl.z]);
+    // tall cabins look down steeply over the bonnet: sink the brow until it stays under that line
+    const hp = hood.getAttribute('position');
+    let over = -1;
+    for (let i = 0; i < hp.count; i++) over = Math.max(over, hp.getY(i) - L.sightAt(hp.getZ(i)));
+    const sink = Math.max(0, over + 0.006);
+    hoodMat.push(hood.translate(0, -sink, 0));
     // the pod's body behind the dials, down into the dash
     (race ? b.carbon : b.dark).push(put(rb(hoodW - 0.01, 0.15, 0.2, 0.02, 2), [cl.x, cl.y - 0.005, cl.z + 0.15]));
-    if (!race) b.stitch.push(put(rb(hoodW - 0.06, 0.003, 0.003, 0.001), [cl.x, cl.y + 0.106, cl.z - 0.02], [0.15, 0, 0]));
+    if (!race) b.stitch.push(put(rb(hoodW - 0.06, 0.003, 0.003, 0.001), [cl.x, cl.y + 0.106 - sink, cl.z - 0.02], [0.15, 0, 0]));
   }
 
   // --- steering column shroud
@@ -588,8 +594,8 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
   } else {
     door.dark.push(put(rb(0.06, 0.03, dlen + 0.02, 0.014, 3), [dx - 0.012, by - 0.005, dzc]));
     // door pull strap and a bare release cable
-    door.accent.push(put(rb(0.012, 0.025, 0.18, 0.004), [dx - 0.03, 0.66, ez + 0.32], [0.3, 0, 0]));
-    door.metal.push(rod([dx - 0.025, 0.75, ez + 0.4], [dx - 0.025, 0.72, ez + 0.6], 0.004, 6));
+    door.accent.push(put(rb(0.012, 0.025, 0.18, 0.004), [dx - 0.03, fy + 0.36, ez + 0.32], [0.3, 0, 0]));
+    door.metal.push(rod([dx - 0.025, fy + 0.45, ez + 0.4], [dx - 0.025, fy + 0.42, ez + 0.6], 0.004, 6));
     // riveted aluminium kick plate
     door.metal.push(put(rb(0.006, 0.16, 0.5, 0.003), [dx - 0.022, fy + 0.13, ez + 0.3]));
     for (let i = 0; i < 6; i++) door.chrome.push(put(new CylinderGeometry(0.004, 0.004, 0.004, 8), [dx - 0.026, fy + 0.2, ez + 0.08 + i * 0.088], [0, 0, Math.PI / 2]));
@@ -717,7 +723,22 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
       const d3 = new Vector3(s * (f.halfW - 0.1), fy + 0.12, zf + 0.12);
       b.accent.push(rod(d0, d1, r * 0.85), rod(d2, d3, r * 0.85));
       // foam padding on the bar by the driver's head
-      if (s > 0) b.dark.push(rod(aMid.clone().lerp(aTop, 0.25), aMid.clone().lerp(aTop, 0.75), r * 1.9, 10));
+      // (on narrow canopies the bar crosses the view over the bonnet: pad only what stays under it)
+      if (s > 0) {
+        for (const [t0, t1] of [[0.25, 0.75], [0.1, 0.4]]) {
+          const pad = rod(aMid.clone().lerp(aTop, t0), aMid.clone().lerp(aTop, t1), r * 1.9, 10);
+          const pp = pad.getAttribute('position');
+          let clear = true;
+          for (let i = 0; i < pp.count && clear; i++) {
+            const z = pp.getZ(i);
+            if (z > ez + 0.15 && Math.abs(pp.getX(i) - L.driverX) < 0.15 && pp.getY(i) > L.sightAt(z) - 0.004) clear = false;
+          }
+          if (clear) {
+            b.dark.push(pad);
+            break;
+          }
+        }
+      }
     }
     const tl = new Vector3(f.roofW - 0.05, topY(cz), cz);
     const tr = new Vector3(-(f.roofW - 0.05), topY(cz), cz);
@@ -725,7 +746,7 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
     const zh = f.zRoofFront - 0.02;
     b.accent.push(rod(new Vector3(f.roofW - 0.05, f.roofAt(zh) - 0.055, zh), new Vector3(-(f.roofW - 0.05), f.roofAt(zh) - 0.055, zh), r * 0.85));
     // harness bar and the extinguisher in the passenger footwell
-    b.accent.push(rod(new Vector3(f.halfW - 0.08, 0.72, cz), new Vector3(-(f.halfW - 0.08), 0.72, cz), r * 0.9));
+    b.accent.push(rod(new Vector3(f.halfW - 0.08, fy + 0.42, cz), new Vector3(-(f.halfW - 0.08), fy + 0.42, cz), r * 0.9));
     b.red.push(rod([-L.driverX - 0.1, fy + 0.1, ez + 0.55], [-L.driverX + 0.15, fy + 0.1, ez + 0.55], 0.045, 16));
     b.chrome.push(rod([-L.driverX + 0.15, fy + 0.1, ez + 0.55], [-L.driverX + 0.2, fy + 0.1, ez + 0.55], 0.02, 10));
   }

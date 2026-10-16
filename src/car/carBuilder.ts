@@ -19,6 +19,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import {
   brakeGeometry,
   cabinPart,
+  RIM_R,
+  RIM_W,
   emptyPart,
   exhaustPart,
   frontPart,
@@ -37,7 +39,7 @@ import { ExhaustFx } from './exhaustFx';
 import { Underglow } from './underglow';
 import { createCarMaterials, getSharedMaterials, type CarMaterials, type PaintLayout } from './materials';
 import type { CarBuild } from './parts';
-import { SKELETON } from './skeleton';
+import { skeletonFor, TRAVEL } from './skeleton';
 
 export interface WheelState {
   steer: number;
@@ -123,13 +125,12 @@ export function buildCarGeometry(build: CarBuild): CarGeometry {
   return cached(geoCache, key, 8, () => {
     const dome = build.hood === 'smooth';
     const shell = cached(shellCache, `${build.body}|${build.front}|${build.rear}|${dome}`, 4, () => shellPart(build.body, build.front, build.rear, dome));
-    const s = shell.surface;
     const cabin = cabinPart(build.body, shell);
     const front = frontPart(build.front, shell);
     const rear = rearPart(build.rear, shell);
-    const hood = hoodPart(build.hood, s, shell.hoodStart, shell.hoodEnd);
-    const skirts = skirtPart(build.skirts, s);
-    const spoiler = spoilerPart(build.spoiler, s);
+    const hood = hoodPart(build.hood, shell);
+    const skirts = skirtPart(build.skirts, shell);
+    const spoiler = spoilerPart(build.spoiler, shell);
     const lights = headlightPart(build.headlights, shell);
     const exhaust = exhaustPart(build.exhaust, shell);
     const parts: PartGeo[] = [shell.geo, cabin, front, rear, hood, skirts, spoiler, lights, exhaust.geo];
@@ -137,10 +138,17 @@ export function buildCarGeometry(build: CarBuild): CarGeometry {
     for (const p of parts) {
       for (const k of Object.keys(all) as (keyof PartGeo)[]) all[k].push(...p[k].map((g) => normalizeGeo(g, k === 'paint')));
     }
+    const K = shell.K;
     const layout: PaintLayout = {
       hoodStart: shell.hoodStart + 0.06,
       hoodEnd: shell.hoodEnd,
       doors: [shell.doors.front, shell.doors.rear, shell.doors.rear - 0.32],
+      doorY: shell.doorY,
+      ends: [shell.bumpers.front, shell.bumpers.rear],
+      archF: [K.front.r, K.front.z, K.front.arch],
+      archR: [K.rear.r, K.rear.z, K.rear.arch],
+      lift: K.lift,
+      wellX: K.wellX,
     };
     return { buckets: all, exhaustTips: exhaust.tips, layout };
   });
@@ -193,9 +201,9 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     g.computeBoundingBox();
     if (g.boundingBox) bounds.union(g.boundingBox);
   }
-  const wr = SKELETON.wheelRadius;
-  bounds.expandByPoint(_p.set(SKELETON.wheelX + SKELETON.wheelWidth / 2, 0, SKELETON.frontAxleZ + wr));
-  bounds.expandByPoint(_p.set(-SKELETON.wheelX - SKELETON.wheelWidth / 2, 0, SKELETON.rearAxleZ - wr));
+  const K = skeletonFor(build.body);
+  bounds.expandByPoint(_p.set(K.front.x + K.front.width / 2, 0, K.front.z + K.front.r));
+  bounds.expandByPoint(_p.set(-K.rear.x - K.rear.width / 2, 0, K.rear.z - K.rear.r));
   const hitbox = {
     front: bounds.max.z,
     back: -bounds.min.z,
@@ -217,14 +225,16 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     root.add(underglow.pool);
   }
 
-  // wheels: instanced, 4 per car
+  // wheels: instanced, 4 per car, drawn at the rear wheel's size; the front pair is scaled to its own
+  const rimR = K.rear.r * K.rimShare;
+  const toWheel = (g: BufferGeometry) => g.scale(K.rear.width / RIM_W, rimR / RIM_R, rimR / RIM_R);
   const brakes = brakeGeometry();
-  const tire = mergeAll([tireGeometry()]);
+  const tire = mergeAll([tireGeometry(K.rear.r, rimR, K.rear.width)]);
   const rim = rimGeometry(build.rims);
-  const rimMain = mergeAll(rim.main);
-  const rimAccent = mergeAll([...rim.accent, brakes.holes]);
-  const disc = mergeAll([brakes.disc]);
-  const caliper = mergeAll([brakes.caliper]);
+  const rimMain = mergeAll(rim.main.map(toWheel));
+  const rimAccent = mergeAll([...rim.accent, brakes.holes].map(toWheel));
+  const disc = mergeAll([toWheel(brakes.disc)]);
+  const caliper = mergeAll([toWheel(brakes.caliper)]);
   const spinning: InstancedMesh[] = [];
   const fixed: InstancedMesh[] = [];
   const addInst = (g: BufferGeometry | null, m: Material, list: InstancedMesh[]) => {
@@ -251,11 +261,12 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
   if (!opts.ghost) root.add(shadow);
 
   const wheelPos = [
-    [SKELETON.wheelX, SKELETON.frontAxleZ, 1],
-    [-SKELETON.wheelX, SKELETON.frontAxleZ, -1],
-    [SKELETON.wheelX, SKELETON.rearAxleZ, 1],
-    [-SKELETON.wheelX, SKELETON.rearAxleZ, -1],
+    [K.front.x, K.front.z, 1],
+    [-K.front.x, K.front.z, -1],
+    [K.rear.x, K.rear.z, 1],
+    [-K.rear.x, K.rear.z, -1],
   ];
+  const frontScale = new Vector3(K.front.width / K.rear.width, K.front.r / K.rear.r, K.front.r / K.rear.r);
 
   const visual: CarVisual = {
     root,
@@ -275,15 +286,17 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
         const front = i < 2;
         // the arches are cut for this much lock and travel; never draw past it
         const steer = front ? Math.max(-0.6, Math.min(0.6, state.steer)) : 0;
-        _p.set(x, SKELETON.wheelY + Math.max(-SKELETON.travelDown, Math.min(SKELETON.travelUp, state.travel[i] ?? 0)), z);
+        const a = front ? K.front : K.rear;
+        _p.set(x, a.r + Math.max(-TRAVEL.down, Math.min(TRAVEL.up, state.travel[i] ?? 0)), z);
+        const sc = front ? frontScale : _s;
         // left-side wheels are the right-side wheel turned around, so no mirroring is needed
         const flip = side < 0 ? Math.PI : 0;
         _e.set(0, steer + flip, 0, 'YXZ');
         _q.setFromEuler(_e);
         const spinQ = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), side < 0 ? -state.spin : state.spin);
-        _m.compose(_p, _q.clone().multiply(spinQ), _s);
+        _m.compose(_p, _q.clone().multiply(spinQ), sc);
         for (const im of spinning) im.setMatrixAt(i, _m);
-        _m.compose(_p, _q, _s);
+        _m.compose(_p, _q, sc);
         for (const im of fixed) im.setMatrixAt(i, _m);
       }
       for (const im of spinning) im.instanceMatrix.needsUpdate = true;
