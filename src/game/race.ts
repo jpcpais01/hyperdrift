@@ -24,6 +24,11 @@ import { applyCar, packCar, unpackCar, type CarSnapshot } from '../net/carState'
 import type { Room } from '../net/room';
 
 /** The static race world (built once, reused by every race and by the menu backdrop). */
+/** The engine note swells and chokes with the nitro surges. */
+function surgeSound(c: RaceCar) {
+  return Math.max(0.62, Math.min(1.35, 0.62 + 0.38 * (c.visual.exhaust?.surge ?? 1)));
+}
+
 export class RaceWorld {
   readonly scene = new Scene();
   readonly track = new Track(SKYWAY);
@@ -313,7 +318,7 @@ export class Race {
       const lag = Math.max(0, Math.min(0.25, this.time - s.rt));
       const steps = Math.round(lag / FIXED);
       for (let k = 0; k < steps; k++) p.step(FIXED, s.input);
-      p.events = p.events.filter((e) => e.type === 'nitro' || e.type === 'pop');
+      p.events = p.events.filter((e) => e.type === 'nitro' || e.type === 'nitroEnd' || e.type === 'pop');
     }
     c.netOffset.copy(seenPos).sub(p.pos);
     if (c.netOffset.lengthSq() > 7 * 7) {
@@ -487,6 +492,7 @@ export class Race {
     // camera
     const t = performance.now() / 1000;
     const cockpit = this.player && !this.spectate && this.chase.inCockpit ? this.cockpit : null;
+    this.chase.orbitEnabled = this.mode !== 'attract' && !this.spectate;
     if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
     else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
@@ -503,7 +509,13 @@ export class Race {
       if (audio.ctx && !audio.hasVoice('player')) this.startAudio();
       const p = this.player.physics;
       const speedK = Math.max(0, (p.speed - 45) / 50);
-      renderer.setSpeedFx(Math.min(1.2, speedK * 0.6 + p.boostFx * 0.9), p.boostFx * 0.5);
+      // nitro surges pulse the speed blur and the blue edge of the screen
+      const surge = (this.player.visual.exhaust?.surge ?? 1) - 1;
+      this.chase.surge = surge * p.nitroFx;
+      renderer.setSpeedFx(
+        Math.min(1.4, speedK * 0.6 + p.boostFx * 0.9 + surge * p.nitroFx * 0.35),
+        p.boostFx * 0.5 + Math.max(-0.3, surge) * p.nitroFx * 0.45,
+      );
       this.updateAudio(dt, camera);
       this.updateHud(dt);
     } else {
@@ -563,7 +575,7 @@ export class Race {
       {
         rpm: p.rpm,
         throttle: racing ? d.throttle : player.lastInput.throttle || (p.rpm > 0.3 ? 1 : 0),
-        nitro: p.nitroFx,
+        nitro: p.nitroFx * surgeSound(player),
         limiter: d.limiter,
         cut: d.cut > 0,
       },
@@ -587,7 +599,7 @@ export class Race {
       const pitch = Math.max(0.75, Math.min(1.35, 343 / (343 - closing * 0.9)));
       audio.updateVoice(
         c.voice,
-        { rpm: q.rpm, throttle: q.drivetrain.throttle, nitro: q.nitroFx, limiter: q.drivetrain.limiter, cut: q.drivetrain.cut > 0, gain, pan: to.dot(right) * 0.9, pitch },
+        { rpm: q.rpm, throttle: q.drivetrain.throttle, nitro: q.nitroFx * surgeSound(c), limiter: q.drivetrain.limiter, cut: q.drivetrain.cut > 0, gain, pan: to.dot(right) * 0.9, pitch },
         dt,
       );
     }
@@ -690,7 +702,7 @@ export class Race {
       const nitro = p.nitroFx > 0.3;
       const tips = c.visual.exhaustTips.length;
       // nitro sheds bright blue sparks; a plain boost a few embers
-      const n = nitro ? 2 : 1;
+      const n = nitro ? Math.round(1 + Math.random() * 1.6 * (c.visual.exhaust?.surge ?? 1)) : 1;
       for (let k = 0; k < n; k++) {
         const wp = c.visual.tipWorld(Math.floor(Math.random() * tips), TMP);
         const v = TMP2.copy(p.vel)
@@ -716,6 +728,19 @@ export class Race {
             this.world.particles.emit(wp, TMP2.copy(p.vel).addScaledVector(p.fwd, -4 - Math.random() * 4).addScaledVector(p.up, Math.random() * 2), SPARK, 0.9, 0.08, 0.25, 0, 2);
           }
         }
+        continue;
+      }
+      if (e.type === 'nitroEnd') {
+        // shut-off: a gust of gas and a puff of sparks, then the pipes crackle (fired by the exhaust)
+        c.visual.exhaust?.cutoff();
+        if (c.voice) audio.pop(c.voice, 0.45);
+        const tips = c.visual.exhaustTips.length;
+        for (let k = 0; k < 6 && tips; k++) {
+          const wp = c.visual.tipWorld(k, TMP);
+          const v = TMP2.set((Math.random() - 0.5) * 3, Math.random() * 2.5, (Math.random() - 0.5) * 3).addScaledVector(p.vel, 0.85).addScaledVector(p.fwd, -6);
+          this.world.particles.emit(wp, v, k % 2 ? NITRO_SPARK : SPARK, 0.8, 0.12, 0.3, 0.2, 2);
+        }
+        if (c.isPlayer) this.chase.addShake(0.2);
         continue;
       }
       if (e.type === 'nitro') {
@@ -847,6 +872,21 @@ export class Race {
         drifting: p.drifting,
         grounded: p.grounded,
       });
+      if (v.exhaust) {
+        // crackles after a nitro shut-off: heard and seen like any backfire
+        for (const s of v.exhaust.takePops()) {
+          if (c.voice) audio.pop(c.voice, s);
+          if (v.exhaustTips.length) {
+            const wp = v.tipWorld(Math.floor(Math.random() * v.exhaustTips.length), TMP);
+            this.world.particles.emit(wp, TMP2.copy(p.vel).addScaledVector(p.fwd, -4 - Math.random() * 4).addScaledVector(p.up, Math.random() * 2), SPARK, 0.9, 0.08, 0.25, 0, 2);
+          }
+        }
+        // big nitro bursts thump the camera
+        if (v.exhaust.kick > 0) {
+          if (c.isPlayer && v.exhaust.kick > 0.3) this.chase.addShake(v.exhaust.kick * 0.22);
+          v.exhaust.kick = 0;
+        }
+      }
     }
   }
 
@@ -865,6 +905,7 @@ export class Race {
       drifting: p.drifting,
       latAccel: p.yawRate * p.speed,
       parked: racing ? 0 : 1,
+      lean: this.chase.headLean,
     });
   }
 
