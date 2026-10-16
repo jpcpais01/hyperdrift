@@ -9,6 +9,7 @@ import {
   type PartOption,
   type Slot,
 } from '../car/parts';
+import { INTERIOR_SLOTS, INTERIOR_SUB_SLOTS } from '../car/interiorParts';
 import { computeStats, displayStats, type DisplayStats } from '../car/stats';
 import { audio } from '../core/audio';
 import { isTouch } from '../core/fullscreen';
@@ -123,6 +124,8 @@ export class MenuScreen {
 
 // ---------------------------------------------------------------- garage
 
+type GarageTab = 'visual' | 'tech' | 'interior';
+
 const STAT_LABELS: [keyof DisplayStats, string][] = [
   ['speed', 'Velocidade'],
   ['accel', 'Aceleração'],
@@ -132,7 +135,7 @@ const STAT_LABELS: [keyof DisplayStats, string][] = [
 
 export class GarageScreen {
   readonly el: HTMLElement;
-  private tab: 'visual' | 'tech' = 'visual';
+  private tab: GarageTab = 'visual';
   private slot: Slot = 'body';
   /** the chosen sub-entry when the slot has a row of them (paint zones, vinyl/rim colour) */
   private sub: Slot = 'body';
@@ -142,6 +145,8 @@ export class GarageScreen {
   private optsEl: HTMLElement;
   private statsEl: HTMLElement;
   onChange: ((b: CarBuild, slot: Slot) => void) | null = null;
+  /** the camera follows what's being edited: the interior tab sits you in the driver's seat */
+  onView: ((interior: boolean, slot: Slot) => void) | null = null;
   onBack: (() => void) | null = null;
   onRace: (() => void) | null = null;
 
@@ -156,6 +161,7 @@ export class GarageScreen {
       <aside class="garage-panel">
         <div class="tabs">
           <button data-tab="visual" class="on">Visual</button>
+          <button data-tab="interior">Interior</button>
           <button data-tab="tech">Técnico</button>
         </div>
         <div class="slots"></div>
@@ -182,8 +188,8 @@ export class GarageScreen {
     this.el.querySelectorAll('[data-tab]').forEach((b) =>
       b.addEventListener('click', () => {
         audio.click();
-        this.tab = (b as HTMLElement).dataset.tab as 'visual' | 'tech';
-        this.slot = this.tab === 'visual' ? VISUAL_SLOTS[0].slot : TECH_SLOTS[0].slot;
+        this.tab = (b as HTMLElement).dataset.tab as GarageTab;
+        this.slot = (this.tab === 'visual' ? VISUAL_SLOTS : this.tab === 'interior' ? INTERIOR_SLOTS : TECH_SLOTS)[0].slot;
         this.sub = this.slot;
         this.el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
         this.render();
@@ -198,7 +204,7 @@ export class GarageScreen {
   }
 
   private render() {
-    const slots = this.tab === 'visual' ? VISUAL_SLOTS : TECH_SLOTS;
+    const slots: { slot: Slot; label: string }[] = this.tab === 'visual' ? VISUAL_SLOTS : this.tab === 'interior' ? INTERIOR_SLOTS : TECH_SLOTS;
     this.slotsEl.innerHTML = '';
     for (const s of slots) {
       const b = h('button', s.slot === this.slot ? 'on' : '', esc(s.label));
@@ -210,7 +216,8 @@ export class GarageScreen {
       });
       this.slotsEl.appendChild(b);
     }
-    const subs = SUB_SLOTS[this.slot as keyof typeof SUB_SLOTS];
+    const subs: { slot: Slot; label: string }[] | undefined =
+      SUB_SLOTS[this.slot as keyof typeof SUB_SLOTS] ?? INTERIOR_SUB_SLOTS[this.slot as keyof typeof INTERIOR_SUB_SLOTS];
     this.subEl.innerHTML = '';
     this.subEl.classList.toggle('hidden', !subs);
     if (!subs || !subs.some((x) => x.slot === this.sub)) this.sub = this.slot;
@@ -225,6 +232,7 @@ export class GarageScreen {
       this.subEl.appendChild(b);
     }
     const slot = this.sub;
+    this.onView?.(this.tab === 'interior', slot);
     this.optsEl.innerHTML = '';
     const opts: PartOption[] = optionsFor(slot);
     for (const o of opts) {

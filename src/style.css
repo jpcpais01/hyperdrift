@@ -667,6 +667,18 @@ button {
   opacity: 1;
   transform: scale(1.15);
 }
+.hud-cam .wheel-ico,
+.hud-cam[data-zoom='3'] .cam-ico,
+.hud-cam[data-zoom='3'] .hud-cam-dots {
+  display: none;
+}
+.hud-cam[data-zoom='3'] .wheel-ico {
+  display: block;
+  width: 62%;
+  height: 62%;
+  margin-top: 0;
+  stroke-width: 2;
+}
 .hud-cam:active {
   transform: scale(0.94);
 }

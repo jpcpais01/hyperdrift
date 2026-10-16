@@ -1,5 +1,7 @@
 import { Color, PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
+import { Cockpit } from '../car/cockpit';
+import { isTouch } from '../core/fullscreen';
 import { paintById, randomBuild, type CarBuild } from '../car/parts';
 import { computeStats, type CarStats } from '../car/stats';
 import { engineProfile } from '../audio/engineProfile';
@@ -139,6 +141,8 @@ export class Race {
   private scrapeCooldown = 0;
   private player: RaceCar | null = null;
   private chase = new ChaseCamera();
+  /** the player's interior, for the first-person camera */
+  private cockpit: Cockpit | null = null;
   private countdown: number;
   private lastCount = -1;
   time = 0;
@@ -258,6 +262,7 @@ export class Race {
       world.scene.add(this.ghostVisual.root);
     }
     if (this.player) {
+      this.cockpit = new Cockpit(this.player.build, isTouch(), world.sky.envMap);
       this.startAudio();
       hud?.setTrack(track);
       hud?.show(true, mode === 'timetrial' ? 'timetrial' : 'race');
@@ -477,12 +482,16 @@ export class Race {
 
     // camera
     const t = performance.now() / 1000;
+    const cockpit = this.player && !this.spectate && this.chase.inCockpit ? this.cockpit : null;
     if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
+    else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
+    renderer.setOverlay(cockpit ? cockpit.scene : null);
     this.world.decor.update(dt, camera.position);
     // shadows follow the player (or whatever the attract camera is looking at)
     const focus = this.player ? this.player.physics.pos : camera.getWorldDirection(scratchFocus).multiplyScalar(18).add(camera.position);
     this.world.sky.update(t, camera.position, 20, focus);
+    cockpit?.renderMirror(renderer.gl, this.world.scene);
 
     // post fx + audio + hud
     this.updateTags(camera);
@@ -831,6 +840,24 @@ export class Race {
     }
   }
 
+  private updateCockpit(cockpit: Cockpit, car: RaceCar, camera: PerspectiveCamera, dt: number, t: number, racing: boolean) {
+    const p = car.physics;
+    cockpit.follow(car.visual.body);
+    this.chase.updateCockpit(camera, p, car.visual.body, cockpit.eye, dt, t);
+    cockpit.update(dt, {
+      steer: p.steerVisual + (p.drifting ? p.driftDir * 0.35 : 0),
+      rpm: p.rpm,
+      gear: p.gear,
+      speed: p.forwardSpeed,
+      nitro: p.nitro,
+      nitroActive: p.nitroActive,
+      limiter: p.drivetrain.limiter,
+      drifting: p.drifting,
+      latAccel: p.yawRate * p.speed,
+      parked: racing ? 0 : 1,
+    });
+  }
+
   setCameraZoom(level: CameraZoom, instant = false) {
     this.chase.setZoom(level, instant);
   }
@@ -951,6 +978,8 @@ export class Race {
       this.world.scene.remove(this.ghostVisual.root);
       this.ghostVisual.dispose();
     }
+    this.cockpit?.dispose();
+    this.cockpit = null;
     if (this.player) audio.stopEngine();
     this.hud?.show(false);
     this.hud?.setCountdown('');
