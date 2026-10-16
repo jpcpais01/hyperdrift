@@ -1,13 +1,20 @@
 import { Quaternion, Vector3, Matrix4 } from 'three';
 import { HALF_WIDTH, makeQuery, type Track } from '../track/track';
 import type { CarStats } from '../car/stats';
+import { Drivetrain } from './drivetrain';
 
 export interface DriveInput {
   throttle: number;
   brake: number;
   /** -1 = left, +1 = right */
   steer: number;
+  /** hold to burn nitro */
+  nitro?: number;
 }
+
+/** Nitro tank at the start of a race, and what a nitro crystal adds (fractions of a full tank). */
+export const NITRO_START = 0.45;
+export const NITRO_PICKUP = 0.5;
 
 export const GRAVITY = 24;
 const CAR_HALF_WIDTH = 1.05;
@@ -30,6 +37,10 @@ export type CarEvent =
   | { type: 'boost'; power: number }
   | { type: 'driftStart' }
   | { type: 'driftBoost'; amount: number }
+  | { type: 'nitro' }
+  | { type: 'nitroEnd' }
+  | { type: 'pop'; strength: number }
+  | { type: 'shift'; up: boolean }
   | { type: 'respawn' };
 
 /**
@@ -72,6 +83,15 @@ export class CarPhysics {
   /** smoothed 0..1 boost intensity for effects */
   boostFx = 0;
 
+  /** nitro tank, 0..1 */
+  nitro = NITRO_START;
+  nitroActive = false;
+  /** smoothed 0..1 nitro burn for effects */
+  nitroFx = 0;
+  /** seconds since the nitro was lit (for the ignition flash) */
+  nitroAge = 0;
+  readonly drivetrain: Drivetrain;
+
   // visual suspension
   pitch = 0;
   roll = 0;
@@ -80,8 +100,6 @@ export class CarPhysics {
   private rollVel = 0;
   private heaveVel = 0;
 
-  rpm = 0.2;
-  gear = 0;
   slip = 0;
   events: CarEvent[] = [];
   private q = makeQuery();
@@ -90,7 +108,25 @@ export class CarPhysics {
   constructor(
     public track: Track,
     public stats: CarStats,
-  ) {}
+    seed = 1,
+  ) {
+    this.drivetrain = new Drivetrain(stats, seed);
+  }
+
+  /** revs as a fraction of the redline */
+  get rpm() {
+    return this.drivetrain.rpm;
+  }
+  set rpm(v: number) {
+    this.drivetrain.rpm = v;
+  }
+  get gear() {
+    return this.drivetrain.gear;
+  }
+
+  addNitro(amount: number) {
+    this.nitro = Math.min(1, this.nitro + amount);
+  }
 
   /** Place the car at distance s along the track, lateral offset `lat`. */
   reset(s: number, lat: number) {
@@ -110,6 +146,10 @@ export class CarPhysics {
     this.driftTime = 0;
     this.boostTime = 0;
     this.boostFx = 0;
+    this.nitro = NITRO_START;
+    this.nitroActive = false;
+    this.nitroFx = 0;
+    this.drivetrain.reset();
     this.pitch = this.roll = this.heave = 0;
     this.updateQuat();
   }
@@ -137,7 +177,27 @@ export class CarPhysics {
     this.grounded = overDeck && q.height < snap && q.height > -3.5 && (wasGrounded || towards < 3);
 
     if (this.boostTime > 0) this.boostTime -= dt;
-    const boosting = this.boostTime > 0;
+
+    // nitro: hold to burn the tank; the nitro part sets how hard and how long it pushes
+    const wantNitro = (input.nitro ?? 0) > 0.5;
+    if (this.nitroActive) {
+      this.nitro -= dt / (2.6 * st.boostDuration);
+      if (!wantNitro || this.nitro <= 0) {
+        this.nitro = Math.max(0, this.nitro);
+        this.nitroActive = false;
+        this.events.push({ type: 'nitroEnd' });
+      }
+    } else if (wantNitro && this.nitro > 0.08) {
+      this.nitroActive = true;
+      this.nitroAge = 0;
+      this.events.push({ type: 'nitro' });
+    }
+    this.nitroAge += dt;
+    this.nitroFx += ((this.nitroActive ? 1 : 0) - this.nitroFx) * (1 - Math.exp(-(this.nitroActive ? 14 : 4) * dt));
+    const nitroPower = this.nitroActive ? st.boostPower * 1.1 : 0;
+    const padPower = this.boostTime > 0 ? this.boostPower : 0;
+    const thrust = Math.max(nitroPower, padPower);
+    const boosting = thrust > 0;
     this.boostFx += ((boosting ? 1 : 0) - this.boostFx) * (1 - Math.exp(-(boosting ? 10 : 3) * dt));
 
     if (this.grounded) {
@@ -189,7 +249,7 @@ export class CarPhysics {
       // --- longitudinal
       vf = this.vel.dot(this.fwd);
       let vr = this.vel.dot(this.right);
-      const top = st.topSpeed * (boosting ? 1 + 0.28 * this.boostPower : 1);
+      const top = st.topSpeed * (boosting ? 1 + 0.28 * thrust : 1);
       if (input.throttle > 0) {
         const t = Math.max(0, Math.min(1.2, vf / st.topSpeed));
         let a = st.accel * Math.max(0, 1 - Math.pow(t, 2.2));
@@ -205,7 +265,8 @@ export class CarPhysics {
           vf = Math.max(-17, vf - 11 * input.brake * dt);
         }
       }
-      if (boosting) vf += 24 * this.boostPower * dt;
+      if (boosting) vf += 24 * thrust * dt;
+      if (this.drifting) this.nitro = Math.min(1, this.nitro + dt * 0.045 * st.driftCharge);
       // rolling + aero drag, and soft limiter above the current top speed
       const coast = input.throttle <= 0 && input.brake <= 0 ? 3 : 0.6;
       vf -= Math.sign(vf) * Math.min(Math.abs(vf), (coast + 0.0009 * vf * vf) * dt);
@@ -282,15 +343,17 @@ export class CarPhysics {
     this.pos.addScaledVector(this.vel, dt);
     this.updateQuat();
 
-    // drivetrain for sound
-    const spd = Math.abs(this.forwardSpeed);
-    const gears = 6;
-    const span = st.topSpeed / gears;
-    const g = Math.min(gears - 1, Math.floor(spd / span));
-    this.gear = g;
-    const inGear = (spd - g * span) / span;
-    const targetRpm = this.grounded ? (g === 0 ? 0.18 + inGear * 0.8 : 0.45 + inGear * 0.55) : Math.min(1, this.rpm + (input.throttle ? 0.5 : -0.3) * dt * 4);
-    this.rpm += (Math.max(0.15, targetRpm) - this.rpm) * (1 - Math.exp(-12 * dt));
+    // drivetrain for sound and exhaust effects
+    const dtr = this.drivetrain;
+    dtr.step(dt, {
+      speed: this.forwardSpeed,
+      topSpeed: st.topSpeed,
+      throttle: input.throttle,
+      grounded: this.grounded,
+      spin: this.grounded ? Math.min(1, (this.drifting ? 0.5 : 0) + Math.max(0, this.slip - 4) / 12) : 0,
+    });
+    for (const e of dtr.events) this.events.push(e);
+    dtr.events.length = 0;
     this.wheelSpin += (this.forwardSpeed / 0.34) * dt;
     this.steerVisual += (input.steer * -0.45 - this.steerVisual) * (1 - Math.exp(-14 * dt));
   }

@@ -271,6 +271,22 @@ button {
   font-size: 12px;
   font-weight: 600;
 }
+.subslots {
+  margin-top: -2px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+.subslots button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.subslots .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
 .slots button.on {
   border-color: var(--accent);
   color: var(--accent);
@@ -632,9 +648,42 @@ button {
   transform-origin: left;
   transform: scaleX(0);
 }
+.hud .nitro-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.hud .nitro-row b {
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #9fe2ff;
+  text-shadow: 0 0 8px rgba(80, 180, 255, 0.8);
+}
+.hud .bar.boost {
+  flex: 1;
+  height: 9px;
+  border-radius: 5px;
+  transition: box-shadow 0.2s;
+}
 .hud .bar.boost i {
-  background: linear-gradient(90deg, #ffb13d, #ff4e2a);
-  box-shadow: 0 0 12px #ff7a2a;
+  background: linear-gradient(90deg, #3a7bff, #39d4ff 60%, #e6f8ff);
+  box-shadow: 0 0 12px #3fa9ff;
+}
+.hud .nitro-row.ready b {
+  color: #e9fbff;
+}
+.hud .nitro-row.burn .bar.boost {
+  box-shadow: 0 0 16px #56b8ff, 0 0 4px #c9eeff;
+}
+.hud .nitro-row.burn .bar.boost i {
+  background: linear-gradient(90deg, #7a3cff, #3fa9ff 45%, #ffffff);
+  animation: nitro-flicker 0.09s infinite alternate;
+}
+@keyframes nitro-flicker {
+  to {
+    filter: brightness(1.35);
+  }
 }
 .hud .bar.drift i {
   background: linear-gradient(90deg, var(--accent), var(--accent2));
@@ -760,6 +809,39 @@ button {
   width: 96px;
   height: 108px;
   border-radius: 28px;
+}
+.touch-controls .tc-nitro {
+  position: absolute;
+  left: -4px;
+  bottom: calc(100% + 14px);
+  width: 76px;
+  height: 76px;
+  overflow: hidden;
+  color: #bfeeff;
+  opacity: 0.55;
+  transition: opacity 0.2s, box-shadow 0.15s;
+}
+.touch-controls .tc-nitro b {
+  position: relative;
+  z-index: 1;
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+.touch-controls .tc-nitro i {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(0deg, rgba(58, 123, 255, 0.75), rgba(57, 212, 255, 0.6));
+  transform-origin: bottom;
+  transform: scaleY(var(--n, 0));
+}
+.touch-controls .tc-nitro.ready {
+  opacity: 1;
+  border-color: rgba(120, 210, 255, 0.8);
+}
+.touch-controls .tc-nitro.burn {
+  border-color: #dff6ff;
+  box-shadow: 0 0 24px #3fa9ff, inset 0 0 18px rgba(170, 225, 255, 0.7);
 }
 .touch-controls .tc-brake {
   width: 76px;

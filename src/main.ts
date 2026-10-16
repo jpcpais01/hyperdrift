@@ -119,10 +119,11 @@ class App {
       storage.saveSettings(this.settings);
       return this.settings.muted;
     };
-    this.garage.onChange = (b) => {
+    this.garage.onChange = (b, slot) => {
       this.build = b;
       storage.saveBuild(b);
       this.garageScene.setBuild(b);
+      this.garageScene.preview(b, slot);
     };
     this.garage.onBack = () => this.go('menu');
     this.garage.onRace = () => this.startRace(this.raceMode === 'attract' ? 'race' : this.raceMode);
@@ -178,6 +179,7 @@ class App {
 
   private go(state: State) {
     this.endRace();
+    this.garageScene.stopPreview();
     this.state = state;
     this.menu.show(state === 'menu');
     this.garage.show(state === 'garage', this.build);
@@ -200,6 +202,7 @@ class App {
 
   private startRace(mode: RaceMode) {
     this.endRace();
+    this.garageScene.stopPreview();
     this.raceMode = mode;
     this.state = 'race';
     this.menu.show(false);

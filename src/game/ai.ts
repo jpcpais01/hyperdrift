@@ -78,7 +78,11 @@ export class AiDriver {
       throttle = 1;
       brake = 0;
     }
-    return { throttle, brake, steer };
+
+    // nitro on the straights, saving a bit of tank
+    const straight = car.grounded && bend < 0.14 && Math.abs(steer) < 0.3 && throttle > 0 && brake === 0;
+    const nitro = straight && (car.nitroActive ? car.nitro > 0.02 : car.nitro > 0.55 && speed > car.stats.topSpeed * 0.5) ? 1 : 0;
+    return { throttle, brake, steer, nitro };
   }
 }
 
