@@ -450,6 +450,10 @@ export class Race {
         this.collide();
       }
     }
+    // draw every car where it is *now*, between two physics steps, not where the
+    // last step left it: otherwise frames that fit 1 or 3 steps instead of 2 judder
+    const alpha = racing ? this.acc / FIXED : 1;
+    for (const c of this.cars) if (!c.gone) c.physics.interpolate(c.remote ? 1 : alpha);
 
     if (racing && this.player && this.player.lap >= 1 && !this.player.finished) {
       this.recorder.record(dt, this.player.physics.pos, this.player.physics.quat);
@@ -819,8 +823,8 @@ export class Race {
       if (c.gone) continue;
       const p = c.physics;
       const v = c.visual;
-      v.root.position.copy(p.pos);
-      v.root.quaternion.copy(p.quat);
+      v.root.position.copy(p.draw.pos);
+      v.root.quaternion.copy(p.draw.quat);
       if (c.remote) {
         c.netOffset.multiplyScalar(1 - ease);
         c.netQuat.slerp(IDENTITY, ease);
@@ -871,10 +875,11 @@ export class Race {
       while (this.cars[this.attractTarget].gone && this.live.length) this.attractTarget = (this.attractTarget + 1) % this.cars.length;
       this.chase.snap();
     }
-    const car = this.cars[this.attractTarget].physics;
+    const physics = this.cars[this.attractTarget].physics;
+    const car = physics.draw;
     const phase = Math.floor(t / 7) % 3;
     if (phase === 0) {
-      this.chase.update(cam, car, dt, t);
+      this.chase.update(cam, physics, dt, t);
     } else {
       // orbiting cinematic shot
       const a = t * 0.35;

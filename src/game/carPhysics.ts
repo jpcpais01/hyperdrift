@@ -1,5 +1,5 @@
 import { Quaternion, Vector3, Matrix4 } from 'three';
-import { HALF_WIDTH, makeQuery, type Track } from '../track/track';
+import { HALF_WIDTH, makeQuery, type Track, type TrackQuery } from '../track/track';
 import type { CarStats } from '../car/stats';
 import { Drivetrain } from './drivetrain';
 
@@ -46,7 +46,10 @@ export type CarEvent =
 /**
  * Arcade car physics. The car lives in "track space": every step it is
  * projected on the track frame, so loops, corkscrews and banked turns all
- * just work (the deck is magnetic), while gaps let it fly ballistically.
+ * just work. Nothing holds the car on the deck but real forces: it stays in
+ * contact only while the deck has to push on it (gravity plus the curvature
+ * of the deck at the current speed). Go over a crest too fast and it lifts
+ * off; crawl through a loop or sit upside down and it falls.
  */
 export class CarPhysics {
   readonly pos = new Vector3();
@@ -55,6 +58,23 @@ export class CarPhysics {
   readonly up = new Vector3(0, 1, 0);
   readonly right = new Vector3(-1, 0, 0);
   readonly quat = new Quaternion();
+  /**
+   * Pose to draw this frame: interpolated between the last two fixed physics
+   * steps (see interpolate), so the car glides at any frame rate.
+   */
+  readonly draw = {
+    pos: new Vector3(),
+    quat: new Quaternion(),
+    fwd: new Vector3(0, 0, 1),
+    up: new Vector3(0, 1, 0),
+    right: new Vector3(-1, 0, 0),
+  };
+  private prevPos = new Vector3();
+  private prevQuat = new Quaternion();
+  /** teleported this step (reset/respawn): draw the new pose, don't sweep to it */
+  private jumped = true;
+  /** what the deck has to push to keep the car on it (m/s^2); below 0 it lets go */
+  contactForce = GRAVITY;
   yawRate = 0;
   /** extra yaw from car-to-car impacts (rad/s), decays on its own */
   spin = 0;
@@ -152,6 +172,24 @@ export class CarPhysics {
     this.drivetrain.reset();
     this.pitch = this.roll = this.heave = 0;
     this.updateQuat();
+    this.jumped = true;
+    this.interpolate(1);
+  }
+
+  /** Blend the drawn pose between the previous and the current physics step (alpha 0..1). */
+  interpolate(alpha: number) {
+    const d = this.draw;
+    if (this.jumped || alpha >= 1) {
+      d.pos.copy(this.pos);
+      d.quat.copy(this.quat);
+    } else {
+      const a = Math.max(0, alpha);
+      d.pos.lerpVectors(this.prevPos, this.pos, a);
+      d.quat.slerpQuaternions(this.prevQuat, this.quat, a);
+    }
+    d.fwd.set(0, 0, 1).applyQuaternion(d.quat);
+    d.up.set(0, 1, 0).applyQuaternion(d.quat);
+    d.right.set(-1, 0, 0).applyQuaternion(d.quat);
   }
 
   triggerBoost(duration: number, power: number) {
@@ -166,15 +204,28 @@ export class CarPhysics {
 
   step(dt: number, input: DriveInput) {
     const st = this.stats;
+    this.jumped = false;
+    this.prevPos.copy(this.pos);
+    this.prevQuat.copy(this.quat);
     const q = this.track.query(this.pos, this.trackIndex, this.q);
     this.trackIndex = q.index;
     this.trackS = q.s;
     this.lateral = q.lateral;
     const overDeck = !q.gap && Math.abs(q.lateral) < HALF_WIDTH + 0.4;
-    const snap = this.grounded ? 1.6 : 0.4;
+    // Contact: to follow the deck the car needs v^2 * curvature towards the deck's
+    // up, and gravity already supplies -g.up of that. The deck can only push, so
+    // when the rest would have to be a pull the car simply leaves it.
+    const along = this.vel.dot(q.fwd);
+    this.contactForce = along * along * this.deckCurvature(q) + GRAVITY * q.up.y;
     const towards = this.vel.dot(q.up);
     const wasGrounded = this.grounded;
-    this.grounded = overDeck && q.height < snap && q.height > -3.5 && (wasGrounded || towards < 3);
+    if (wasGrounded) {
+      // the small allowance only stops float noise from flickering contact on flat-out crests
+      this.grounded = overDeck && q.height < 0.6 && q.height > -3.5 && this.contactForce > -0.4;
+    } else {
+      // touch down only when actually coming down onto the deck
+      this.grounded = overDeck && q.height < 0.2 && q.height > -3.5 && towards < 0.5 && this.contactForce > 0;
+    }
 
     if (this.boostTime > 0) this.boostTime -= dt;
 
@@ -204,12 +255,17 @@ export class CarPhysics {
       if (!wasGrounded) this.land(q.up);
       this.airTime = 0;
       this.lastGroundIndex = q.index;
-      // stick to the deck
+      // resting on the deck: sit on its surface and ride along it
       this.pos.addScaledVector(q.up, -q.height);
       this.up.lerp(q.up, 1 - Math.exp(-25 * dt)).normalize();
       this.vel.addScaledVector(q.up, -this.vel.dot(q.up));
       this.fwd.addScaledVector(this.up, -this.fwd.dot(this.up)).normalize();
       this.right.crossVectors(this.fwd, this.up).normalize();
+      // drive in the deck's own plane: the body's up eases towards the deck for looks,
+      // but if the velocity followed that lagging up it would dig into the deck and
+      // pop back out every step, which shows up as a shudder
+      const dFwd = this.deckFwd.copy(this.fwd).addScaledVector(q.up, -this.fwd.dot(q.up)).normalize();
+      const dRight = this.deckRight.crossVectors(dFwd, q.up).normalize();
 
       // --- steering & drift
       let vf = this.vel.dot(this.fwd);
@@ -245,10 +301,12 @@ export class CarPhysics {
       this.yawRate += (targetYaw - this.yawRate) * (1 - Math.exp(-st.yawResponse * dt));
       rotateAround(this.fwd, this.up, this.yawRate * dt);
       this.right.crossVectors(this.fwd, this.up).normalize();
+      dFwd.copy(this.fwd).addScaledVector(q.up, -this.fwd.dot(q.up)).normalize();
+      dRight.crossVectors(dFwd, q.up).normalize();
 
       // --- longitudinal
-      vf = this.vel.dot(this.fwd);
-      let vr = this.vel.dot(this.right);
+      vf = this.vel.dot(dFwd);
+      let vr = this.vel.dot(dRight);
       const top = st.topSpeed * (boosting ? 1 + 0.28 * thrust : 1);
       if (input.throttle > 0) {
         const t = Math.max(0, Math.min(1.2, vf / st.topSpeed));
@@ -279,10 +337,10 @@ export class CarPhysics {
       vr = vrNew;
       this.slip = Math.abs(vr);
 
-      // slopes: gravity along the deck (the deck holds you on, so no normal part)
+      // slopes: gravity along the deck (its normal part is what contactForce weighs)
       const g = TMP.set(0, -GRAVITY, 0);
-      g.addScaledVector(this.up, -g.dot(this.up));
-      this.vel.copy(this.fwd).multiplyScalar(vf).addScaledVector(this.right, vr).addScaledVector(g, dt * 0.8);
+      g.addScaledVector(q.up, -g.dot(q.up));
+      this.vel.copy(dFwd).multiplyScalar(vf).addScaledVector(dRight, vr).addScaledVector(g, dt * 0.8);
 
       // --- rails
       const limit = HALF_WIDTH - CAR_HALF_WIDTH;
@@ -327,7 +385,7 @@ export class CarPhysics {
       if (this.drifting && this.airTime > 0.6) this.endDrift(false);
       this.forwardSpeed = this.vel.dot(this.fwd);
       this.spring(dt, 0, 0, 0);
-      const fell = (!overDeck || q.height < -3.5) && (q.height < -45 || Math.abs(q.lateral) > HALF_WIDTH + 70);
+      const fell = ((!overDeck || q.height < -3.5) && (q.height < -45 || Math.abs(q.lateral) > HALF_WIDTH + 70)) || this.pos.y < this.track.lowest - 60 || this.airTime > 9;
       if (fell) this.respawn();
     }
     this.lastForward = this.forwardSpeed;
@@ -359,6 +417,21 @@ export class CarPhysics {
   }
 
   private lastForward = 0;
+  private deckFwd = new Vector3();
+  private deckRight = new Vector3();
+
+  /**
+   * How fast the deck bends towards its own up, per metre, around the query
+   * (positive inside a loop or a dip, negative over a crest). Measured over a
+   * few samples so the polyline's corners don't make it noisy.
+   */
+  private deckCurvature(q: TrackQuery) {
+    const a = this.track.sample(q.index - 2);
+    const b = this.track.sample(q.index + 3);
+    const len = a.pos.distanceTo(b.pos);
+    if (len < 1e-3) return 0;
+    return CURV.copy(b.fwd).sub(a.fwd).dot(q.up) / len;
+  }
 
   private spring(dt: number, pitchT: number, rollT: number, heaveT: number) {
     const k = 120;
@@ -406,7 +479,16 @@ export class CarPhysics {
   respawn() {
     const n = this.track.samples.length;
     let i = (this.lastGroundIndex - 25 + n) % n;
-    while (this.track.samples[i].gap) i = (i - 1 + n) % n;
+    // back to solid, right-way-up deck (not halfway up a loop you just fell out of)
+    // with a run-up long enough to have a go at whatever comes next
+    const upright = (j: number) => !this.track.samples[j].gap && this.track.samples[j].up.y >= 0.7;
+    for (let tries = 0; tries < 6; tries++) {
+      for (let k = 0; k < n && !upright(i); k++) i = (i - 1 + n) % n;
+      let clear = true;
+      for (let k = 1; k <= 60 && clear; k++) clear = upright((i + k) % n) || this.track.samples[(i + k) % n].gap;
+      if (clear) break;
+      i = (i - 100 + n) % n;
+    }
     const fr = this.track.frameAt(i);
     this.pos.copy(fr.pos).addScaledVector(fr.up, 0.3);
     this.fwd.copy(fr.fwd);
@@ -419,6 +501,8 @@ export class CarPhysics {
     this.airTime = 0;
     this.yawRate = 0;
     this.spin = 0;
+    this.updateQuat();
+    this.jumped = true;
     this.events.push({ type: 'respawn' });
   }
 
@@ -441,6 +525,7 @@ export class CarPhysics {
 
 const TMP = new Vector3();
 const TMP2 = new Vector3();
+const CURV = new Vector3();
 const MAT = new Matrix4();
 const QR = new Quaternion();
 

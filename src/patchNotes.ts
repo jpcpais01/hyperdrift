@@ -16,9 +16,19 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 19:00 UTC',
     entries: [
+      'Nitro and boost glow on the road now fades out softly instead of ending in a hard line, and the jets thin out gently where they meet the road.',
+      'Brand-new menus with a console feel. The game opens on a title screen, then the home shows your modes as big tiles over the live race: the selected one grows, glows and fills the screen with its name, details, your best lap and a big play button. Settings (sound, controls, resolution, updates, keyboard map) and patch notes now slide in as side panels, pause is a sleek side menu, and the results board counts in driver by driver with a gold finish for wins. Plug in a gamepad or use the arrows: every menu can be driven with the d-pad, A/✕ to pick, B/○ to go back and LB/RB (Q/E) to flip garage tabs, with button hints on screen.',
+    ],
+  },
+  {
+    hour: '2026-10-16 19:00 UTC',
+    entries: [
+      'Nitro jets are now real volumetric fire: each exhaust shoots a turbulent stream of gas that pours out of the nozzle, with a white-hot core, glowing shock diamonds and a blue-to-violet plume that tears apart at the tail, and it looks solid from any angle. Plain boosts burn orange and lift-off pops spit fireballs.',
       'Online multiplayer! Tap MULTIJOGADOR, create a room and share its 4-digit code (or the Convidar invite link) with up to 3 friends, who punch it in on the built-in number pad, no phone keyboard needed. Empty seats can be filled with AI rivals, everyone starts on the same countdown, rivals carry floating name tags, and the results board updates live as each driver crosses the line.',
       "Car bodies redesigned from the ground up: each body now has its own silhouette, with fenders rising above a sunken hood, muscular rear haunches, a waist along the doors and a stance that sits lower and wider. The GT gets fender gills, the Hyper Cunha deep flank intakes and engine-cover louvres. Every lamp, grille, intake and vent is now moulded onto the curve of the body instead of sitting on top of it, with new LED, projector and hooked headlight designs, wrap-around and C-shaped tail lights, mesh intakes, chrome bezels, dark arch liners, bigger wheels and a smooth power-dome hood. Any mix of parts still fits.",
       "Cockpit view: press C (or the camera button) until you're in the driver's seat. Your gloved hands steer the wheel, reach for the gear lever on every shift and yank the handbrake when you start a drift, the gauges are live, the rear-view mirror really shows who's behind you, and sunlight falls in through the glass. Build the interior in the garage's new INTERIOR tab: cabin style (GT leather, stripped racer with a roll cage in your paint colour, or futuristic with light strips) and leather colour, dashboard, steering wheel, mirror, gear lever and handbrake, 3 of each, and the camera sits you inside to show each part working.",
+      'Chase camera raised and tilted further down at all three distances (near, medium, far), so you see more of the track ahead and around your car.',
+      "Driving is now silky smooth: cars are drawn between physics steps instead of jumping from one to the next, and your car no longer digs into and pops out of the deck, so the little stutter against the ground is gone. The track no longer magically holds you on: only speed keeps you on a loop or upside down, so stop at the top and you fall. The light-tunnel corkscrew now spirals round the inside of its rings like a real coaster corkscrew, so a fast run carries you through.",
     ],
   },
   {
