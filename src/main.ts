@@ -1,3 +1,6 @@
+import '@fontsource-variable/saira/standard.css';
+import '@fontsource-variable/saira/standard-italic.css';
+import '@fontsource-variable/inter/wght.css';
 import './style.css';
 import { randomBuild, sanitizeBuild, type CarBuild } from './car/parts';
 import { audio } from './core/audio';
@@ -16,6 +19,8 @@ import { storage } from './storage';
 import { FpsCounter } from './ui/fps';
 import { Hud } from './ui/hud';
 import { ControlsPanel, GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
+import { nav } from './ui/nav';
+import { computeStats, displayStats } from './car/stats';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
 
@@ -192,6 +197,7 @@ class App {
       this.setPaused(!this.race.paused);
     };
     this.input.onPause = togglePause;
+    nav.onStart = togglePause;
     const cycleCamera = () => {
       if (this.state !== 'race' || !this.race || this.race.paused) return;
       this.settings.camZoom = ((this.settings.camZoom + 1) % 4) as CameraZoom;
@@ -209,11 +215,13 @@ class App {
       if (document.hidden && this.state === 'race' && this.race && !this.race.paused) this.setPaused(true);
     });
 
+    nav.init();
     this.go('menu');
     // invite links: /?sala=1234 opens the room straight away
     const invite = codeFromUrl(location.search);
     if (invite) {
       history.replaceState(null, '', location.pathname + (LAN ? '?lan' : ''));
+      this.menu.skipTitle();
       this.go('mp');
       this.mp.prefill(invite);
       void this.joinRoom(invite);
@@ -265,6 +273,7 @@ class App {
     else this.endRace();
     this.garageScene.stopPreview();
     this.state = state;
+    if (state === 'menu') this.menu.setInfo(storage.loadRecords().bestLap, displayStats(computeStats(this.build)));
     this.menu.show(state === 'menu');
     this.mp.show(state === 'mp');
     if (state === 'mp') this.mp.renderLobby(!!this.race?.net);
@@ -474,6 +483,7 @@ class App {
   }
 
   private frame = (now: number) => {
+    nav.inRace = this.state === 'race';
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     this.time += dt;
