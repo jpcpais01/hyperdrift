@@ -10,7 +10,8 @@ export interface HudCarDot {
 export interface HudData {
   speedKmh: number;
   gear: number;
-  boost: number; // 0..1 remaining boost
+  nitro: number; // 0..1 nitro tank
+  nitroActive: boolean;
   drift: number; // 0..1 drift charge
   place: number;
   total: number;
@@ -39,6 +40,7 @@ export class Hud {
   private speed: HTMLElement;
   private gear: HTMLElement;
   private boostBar: HTMLElement;
+  private nitroRow: HTMLElement;
   private driftBar: HTMLElement;
   private place: HTMLElement;
   private lap: HTMLElement;
@@ -74,7 +76,7 @@ export class Hud {
         <div class="hud-speed"><span class="v">0</span><small>km/h</small></div>
         <div class="hud-gear">1</div>
         <div class="hud-bars">
-          <div class="bar boost"><i></i></div>
+          <div class="nitro-row"><b>N₂O</b><div class="bar boost"><i></i></div></div>
           <div class="bar drift"><i></i></div>
         </div>
       </div>
@@ -86,6 +88,7 @@ export class Hud {
     this.speed = q('.hud-speed .v');
     this.gear = q('.hud-gear');
     this.boostBar = q('.bar.boost i');
+    this.nitroRow = q('.nitro-row');
     this.driftBar = q('.bar.drift i');
     this.place = q('.hud-place');
     this.lap = q('.hud-lap .v');
@@ -181,7 +184,9 @@ export class Hud {
   update(d: HudData, dt: number) {
     this.speed.textContent = String(Math.round(d.speedKmh));
     this.gear.textContent = String(d.gear + 1);
-    this.boostBar.style.transform = `scaleX(${d.boost.toFixed(3)})`;
+    this.boostBar.style.transform = `scaleX(${d.nitro.toFixed(3)})`;
+    this.nitroRow.classList.toggle('ready', d.nitro > 0.08);
+    this.nitroRow.classList.toggle('burn', d.nitroActive);
     this.driftBar.style.transform = `scaleX(${d.drift.toFixed(3)})`;
     this.place.innerHTML = `<span class="v">${ORD[d.place - 1] ?? d.place}</span><small>/${d.total}</small>`;
     this.lap.textContent = `${Math.max(1, Math.min(d.lap, d.laps))}/${d.laps}`;

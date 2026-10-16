@@ -21,7 +21,6 @@ import {
   cabinPart,
   emptyPart,
   exhaustPart,
-  flameGeometry,
   frontPart,
   headlightPart,
   hoodPart,
@@ -33,6 +32,7 @@ import {
   tireGeometry,
   type PartGeo,
 } from './geometry';
+import { ExhaustFx } from './exhaustFx';
 import { createCarMaterials, getSharedMaterials, type CarMaterials } from './materials';
 import type { CarBuild } from './parts';
 import { SKELETON } from './skeleton';
@@ -48,11 +48,15 @@ export interface CarVisual {
   root: Group;
   body: Group;
   materials: CarMaterials;
-  flames: Mesh[];
   /** tight collision box measured from the assembled parts (car space) */
   hitbox: { front: number; back: number; halfWidth: number; height: number };
+  /** exhaust tip positions in body space */
+  exhaustTips: Vector3[];
+  /** flames, pops and nitro (null for the ghost) */
+  exhaust: ExhaustFx | null;
+  /** world position of exhaust tip i */
+  tipWorld(i: number, out: Vector3): Vector3;
   updateWheels(state: WheelState): void;
-  setBoost(amount: number, time: number): void;
   dispose(): void;
 }
 
@@ -166,18 +170,11 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     height: bounds.max.y,
   };
 
-  // boost flames
-  const flames: Mesh[] = [];
-  if (!opts.ghost) {
-    const fg = flameGeometry();
-    owned.push(fg);
-    for (const t of exhaustTips) {
-      const f = new Mesh(fg, mats.flame);
-      f.position.copy(t);
-      f.visible = false;
-      body.add(f);
-      flames.push(f);
-    }
+  // exhaust flames, pops and nitro: one draw call, positioned from the exhaust part's tips
+  const exhaust = opts.ghost ? null : new ExhaustFx(exhaustTips);
+  if (exhaust) {
+    body.add(exhaust.flames);
+    root.add(exhaust.glow);
   }
 
   // wheels: instanced, 4 per car
@@ -224,8 +221,13 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     root,
     body,
     materials: mats,
-    flames,
     hitbox,
+    exhaustTips,
+    exhaust,
+    tipWorld(i: number, out: Vector3) {
+      body.updateWorldMatrix(true, false);
+      return body.localToWorld(out.copy(exhaustTips[i % Math.max(1, exhaustTips.length)] ?? _p.set(0, 0.3, -2.2)));
+    },
     updateWheels(state: WheelState) {
       for (let i = 0; i < 4; i++) {
         const [x, z, side] = wheelPos[i];
@@ -246,15 +248,8 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
       for (const im of spinning) im.instanceMatrix.needsUpdate = true;
       for (const im of fixed) im.instanceMatrix.needsUpdate = true;
     },
-    setBoost(amount: number, time: number) {
-      mats.flame.opacity = Math.min(1, amount) * (0.75 + 0.25 * Math.sin(time * 60));
-      for (const f of flames) {
-        f.visible = amount > 0.02;
-        const k = 0.6 + amount * (0.8 + 0.3 * Math.sin(time * 47 + f.position.x * 10));
-        f.scale.set(1 + amount * 0.4, 1 + amount * 0.4, k);
-      }
-    },
     dispose() {
+      exhaust?.dispose();
       for (const g of owned) g.dispose();
       mats.dispose();
       ghostMat?.dispose();

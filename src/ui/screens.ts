@@ -49,7 +49,7 @@ export class MenuScreen {
       <div class="menu-foot">
         <button class="btn-icon" data-a="sound" aria-label="Som">${muted ? 'SOM: DESLIGADO' : 'SOM: LIGADO'}</button>
         <button class="btn-icon" data-a="notes">PATCH NOTES</button>
-        <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · travar a curvar = drift · C câmara</span>
+        <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · Espaço nitro · travar a curvar = drift · C câmara</span>
       </div>
       <div class="notes hidden">
         <div class="results-card">
@@ -103,7 +103,7 @@ export class GarageScreen {
   private subEl: HTMLElement;
   private optsEl: HTMLElement;
   private statsEl: HTMLElement;
-  onChange: ((b: CarBuild) => void) | null = null;
+  onChange: ((b: CarBuild, slot: Slot) => void) | null = null;
   onBack: (() => void) | null = null;
   onRace: (() => void) | null = null;
 
@@ -194,7 +194,7 @@ export class GarageScreen {
       card.addEventListener('click', () => {
         audio.click();
         this.build = { ...this.build, [slot]: o.id };
-        this.onChange?.(this.build);
+        this.onChange?.(this.build, slot);
         this.render();
       });
       card.addEventListener('pointerenter', (e) => {

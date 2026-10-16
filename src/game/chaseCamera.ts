@@ -95,7 +95,7 @@ export class ChaseCamera {
     }
     cam.up.copy(this.up);
     cam.lookAt(this.look);
-    const fov = f.fov + Math.min(1.2, speed / top) * 12 + boost * 14;
+    const fov = f.fov + Math.min(1.2, speed / top) * 12 + boost * 14 + car.nitroFx * 5;
     cam.fov += (fov - cam.fov) * (1 - Math.exp(-6 * dt));
     cam.updateProjectionMatrix();
   }

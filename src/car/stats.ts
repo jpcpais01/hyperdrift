@@ -1,3 +1,4 @@
+import { engineProfile } from '../audio/engineProfile';
 import { TECH_SLOTS, techById, type CarBuild } from './parts';
 
 /** Everything the physics needs to know about a car, derived only from its technical parts. */
@@ -20,6 +21,10 @@ export interface CarStats {
   rollAmount: number;
   voice: 'v6' | 'rotary' | 'v12';
   whistle: number;
+  /** how fast the revs follow the throttle (1/s) */
+  revRate: number;
+  /** overrun pops per second */
+  popRate: number;
 }
 
 export function computeStats(build: CarBuild): CarStats {
@@ -42,6 +47,8 @@ export function computeStats(build: CarBuild): CarStats {
     rollAmount: 1,
     voice: 'v6',
     whistle: 0,
+    revRate: 11,
+    popRate: 3,
   };
   let accelMul = 1;
   let topMul = 1;
@@ -81,6 +88,9 @@ export function computeStats(build: CarBuild): CarStats {
   s.turboHigh *= accelMul;
   s.grip *= gripMul;
   s.driftCharge = driftChargeMul;
+  const sound = engineProfile(build);
+  s.revRate = sound.revRate;
+  s.popRate = sound.popRate;
   return s;
 }
 

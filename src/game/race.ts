@@ -2,6 +2,7 @@ import { Color, PerspectiveCamera, Scene, Vector3 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
 import { paintById, randomBuild, type CarBuild } from '../car/parts';
 import { computeStats, type CarStats } from '../car/stats';
+import { engineProfile } from '../audio/engineProfile';
 import { audio } from '../core/audio';
 import type { Input } from '../core/input';
 import type { Renderer } from '../core/renderer';
@@ -14,7 +15,7 @@ import { TrackView } from '../world/trackView';
 import type { Hud } from '../ui/hud';
 import { AiDriver } from './ai';
 import { collideCars, type CarContact } from './carCollision';
-import { CarPhysics, type DriveInput } from './carPhysics';
+import { CarPhysics, NITRO_PICKUP, type DriveInput } from './carPhysics';
 import { ChaseCamera, type CameraZoom } from './chaseCamera';
 import { GhostPlayer, GhostRecorder, type GhostLap } from './ghost';
 
@@ -75,6 +76,8 @@ interface RaceCar {
   padCooldown: number;
   lastInput: DriveInput;
   wrongWay: number;
+  /** engine voice id when this car is heard (player and rivals) */
+  voice: string | null;
 }
 
 export const LAPS = 3;
@@ -105,6 +108,7 @@ export class Race {
   private attractTarget = 0;
   private acc = 0;
   private done = false;
+  private fxTime = 0;
   paused = false;
   onFinish: ((r: RaceResult) => void) | null = null;
 
@@ -137,7 +141,7 @@ export class Race {
     // player starts at the back of the grid, like a proper underdog
     grid.forEach((g, i) => {
       const stats = computeStats(g.build);
-      const physics = new CarPhysics(track, stats);
+      const physics = new CarPhysics(track, stats, g.seed + i + 1);
       const row = Math.floor(i / 2);
       const s = (mode === 'timetrial' ? track.length - 12 : track.length - 14 - row * 13) + startOffset;
       const lat = mode === 'timetrial' ? 0 : i % 2 ? 4.2 : -4.2;
@@ -165,6 +169,7 @@ export class Race {
         padCooldown: 0,
         lastInput: { throttle: 0, brake: 0, steer: 0 },
         wrongWay: 0,
+        voice: mode === 'attract' ? null : g.ai ? `rival${i}` : 'player',
       };
       this.cars.push(car);
       this.physicsList.push(physics);
@@ -178,11 +183,20 @@ export class Race {
       world.scene.add(this.ghostVisual.root);
     }
     if (this.player) {
-      audio.startEngine(this.player.stats.voice);
+      this.startAudio();
       hud?.setTrack(track);
       hud?.show(true, mode === 'timetrial' ? 'timetrial' : 'race');
     }
     this.attractTarget = 0;
+  }
+
+  private startAudio() {
+    for (const c of this.cars) {
+      if (!c.voice) continue;
+      const profile = engineProfile(c.build);
+      if (c.isPlayer) audio.startEngine(profile);
+      else audio.startVoice(c.voice, profile, { full: false, spatial: true });
+    }
   }
 
   get playerCar() {
@@ -286,6 +300,7 @@ export class Race {
       this.ghostVisual.root.visible = ok;
     }
 
+    this.fxTime += dt;
     this.updateVisuals(dt);
     this.world.view.update(dt, this.time);
     this.world.particles.update(dt);
@@ -301,18 +316,11 @@ export class Race {
 
     // post fx + audio + hud
     if (this.player) {
+      if (audio.ctx && !audio.hasVoice('player')) this.startAudio();
       const p = this.player.physics;
       const speedK = Math.max(0, (p.speed - 45) / 50);
       renderer.setSpeedFx(Math.min(1.2, speedK * 0.6 + p.boostFx * 0.9), p.boostFx * 0.5);
-      audio.updateEngine({
-        rpm: p.rpm,
-        throttle: this.player.lastInput.throttle,
-        speed: p.speed,
-        boost: p.boostFx,
-        slip: Math.min(1, (p.drifting ? 0.6 : 0) + Math.max(0, p.slip - 4) / 14),
-        whistle: p.stats.whistle,
-        grounded: p.grounded,
-      });
+      this.updateAudio(dt, camera);
       this.updateHud(dt);
     } else {
       renderer.setSpeedFx(0, 0);
@@ -323,6 +331,46 @@ export class Race {
     if (this.finishedAt >= 0 && !this.done && this.time - this.finishedAt > 2.5) {
       this.done = true;
       this.onFinish?.(this.result());
+    }
+  }
+
+  private updateAudio(dt: number, camera: PerspectiveCamera) {
+    const player = this.player!;
+    const p = player.physics;
+    const racing = this.countdown <= 0;
+    const d = p.drivetrain;
+    audio.updateVoice(
+      'player',
+      {
+        rpm: p.rpm,
+        throttle: racing ? d.throttle : player.lastInput.throttle || (p.rpm > 0.3 ? 1 : 0),
+        nitro: p.nitroFx,
+        limiter: d.limiter,
+        cut: d.cut > 0,
+      },
+      dt,
+    );
+    audio.updateEnv({
+      speed: p.speed,
+      slip: Math.min(1, (p.drifting ? 0.6 : 0) + Math.max(0, p.slip - 4) / 14),
+      grounded: p.grounded,
+    });
+    // rivals: distance, stereo position and Doppler from the camera
+    const right = TMP3.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    for (const c of this.cars) {
+      if (c.isPlayer || !c.voice) continue;
+      const q = c.physics;
+      const to = TMP.copy(q.pos).sub(camera.position);
+      const dist = to.length();
+      to.divideScalar(Math.max(1e-3, dist));
+      const gain = dist > 130 ? 0 : 0.85 / (1 + (dist / 11) ** 2);
+      const closing = -TMP2.copy(q.vel).sub(p.vel).dot(to);
+      const pitch = Math.max(0.75, Math.min(1.35, 343 / (343 - closing * 0.9)));
+      audio.updateVoice(
+        c.voice,
+        { rpm: q.rpm, throttle: q.drivetrain.throttle, nitro: q.nitroFx, limiter: q.drivetrain.limiter, cut: q.drivetrain.cut > 0, gain, pan: to.dot(right) * 0.9, pitch },
+        dt,
+      );
     }
   }
 
@@ -390,11 +438,11 @@ export class Race {
       if (!this.world.view.isPickupActive(i)) continue;
       if (picks[i].distanceToSquared(p.pos) < 3.2 * 3.2) {
         this.world.view.collectPickup(i);
-        p.triggerBoost(c.stats.boostDuration * 1.35, c.stats.boostPower);
+        p.addNitro(NITRO_PICKUP);
         if (c.isPlayer) {
           audio.pickup();
-          this.hud?.message('NITRO!', 0.9, 'nitro');
-          this.chase.addShake(0.5);
+          this.hud?.message(p.nitro >= 0.999 ? 'NITRO CHEIO!' : '+ NITRO', 0.9, 'nitro');
+          this.chase.addShake(0.25);
         }
         for (let k = 0; k < 14; k++) {
           const v = new Vector3((Math.random() - 0.5) * 14, Math.random() * 8, (Math.random() - 0.5) * 14);
@@ -418,10 +466,19 @@ export class Race {
         parts.emit(wp, TMP2.set((Math.random() - 0.5) * 4, 2 + Math.random() * 3, (Math.random() - 0.5) * 4).addScaledVector(p.vel, 0.6), col, 1, 0.12, 0.35, 0, 1);
       }
     }
-    if (p.boostFx > 0.3) {
-      for (const tip of c.visual.flames) {
-        const wp = tip.getWorldPosition(TMP);
-        parts.emit(wp, TMP2.copy(p.vel).multiplyScalar(0.7).addScaledVector(p.fwd, -6), EMBER, 0.5 * p.boostFx, 0.14, 0.2, -0.3, 3);
+    if (p.boostFx > 0.3 && c.visual.exhaustTips.length) {
+      const nitro = p.nitroFx > 0.3;
+      const tips = c.visual.exhaustTips.length;
+      // nitro sheds bright blue sparks; a plain boost a few embers
+      const n = nitro ? 2 : 1;
+      for (let k = 0; k < n; k++) {
+        const wp = c.visual.tipWorld(Math.floor(Math.random() * tips), TMP);
+        const v = TMP2.copy(p.vel)
+          .multiplyScalar(0.75)
+          .addScaledVector(p.fwd, -(nitro ? 10 : 6) - Math.random() * 6)
+          .addScaledVector(p.up, (Math.random() - 0.3) * 2)
+          .addScaledVector(p.right, (Math.random() - 0.5) * 2.5);
+        parts.emit(wp, v, nitro ? (Math.random() < 0.3 ? NITRO_WHITE : NITRO_SPARK) : EMBER, (nitro ? 0.9 : 0.5) * p.boostFx, nitro ? 0.1 : 0.14, nitro ? 0.28 : 0.2, -0.2, 2.5);
       }
     }
   }
@@ -429,10 +486,37 @@ export class Race {
   private handleEvents(c: RaceCar) {
     const p = c.physics;
     for (const e of p.events) {
+      // exhaust effects and engine sounds happen for every car
+      if (e.type === 'pop') {
+        c.visual.exhaust?.pop(e.strength);
+        if (c.voice) audio.pop(c.voice, e.strength);
+        if (e.strength > 0.6 && c.visual.exhaustTips.length) {
+          const wp = c.visual.tipWorld(Math.floor(Math.random() * c.visual.exhaustTips.length), TMP);
+          for (let k = 0; k < 3; k++) {
+            this.world.particles.emit(wp, TMP2.copy(p.vel).addScaledVector(p.fwd, -4 - Math.random() * 4).addScaledVector(p.up, Math.random() * 2), SPARK, 0.9, 0.08, 0.25, 0, 2);
+          }
+        }
+        continue;
+      }
+      if (e.type === 'nitro') {
+        c.visual.exhaust?.ignite();
+        if (c.voice) audio.nitroStart(c.voice);
+        const tips = c.visual.exhaustTips.length;
+        for (let k = 0; k < 12 && tips; k++) {
+          const wp = c.visual.tipWorld(k, TMP);
+          const v = TMP2.set((Math.random() - 0.5) * 5, (Math.random() - 0.2) * 4, (Math.random() - 0.5) * 5).addScaledVector(p.vel, 0.8).addScaledVector(p.fwd, -8);
+          this.world.particles.emit(wp, v, k % 3 ? NITRO_SPARK : NITRO_WHITE, 1, 0.16, 0.35, 0.4, 2);
+        }
+        if (c.isPlayer) {
+          this.chase.addShake(0.55);
+          this.hud?.message('NITRO!', 0.7, 'nitro');
+        }
+        continue;
+      }
       if (!c.isPlayer) continue;
       switch (e.type) {
         case 'land':
-          audio.land(e.strength);
+          audio.land(e.strength, p.stats.mass);
           this.chase.addShake(e.strength * 0.8);
           break;
         case 'wall':
@@ -528,9 +612,8 @@ export class Race {
         travel: [p.heave * 0.4 - p.roll * 0.6, p.heave * 0.4 + p.roll * 0.6, p.heave * 0.4 - p.roll * 0.6, p.heave * 0.4 + p.roll * 0.6].map((x) => Math.max(-0.08, Math.min(0.08, x))),
       });
       v.materials.setBrake(c.lastInput.brake > 0 && p.forwardSpeed > 1 ? 1 : 0);
-      v.setBoost(p.boostFx, this.time + c.place);
+      v.exhaust?.update(dt, this.fxTime + c.place * 3.1, Math.max(0, p.boostFx - p.nitroFx), p.nitroFx);
     }
-    void dt;
   }
 
   setCameraZoom(level: CameraZoom, instant = false) {
@@ -563,6 +646,7 @@ export class Race {
   private updateHud(dt: number) {
     if (!this.hud || !this.player) return;
     const p = this.player.physics;
+    this.input?.setNitro(p.nitro, p.nitroActive);
     const best = this.mode === 'timetrial' ? this.ghostBest?.time ?? null : this.player.lapTimes.length ? Math.min(...this.player.lapTimes) : null;
     let ghostDelta: number | null = null;
     if (this.mode === 'timetrial' && this.ghostBest && this.player.lap >= 1 && this.player.lapTimes.length > 0) {
@@ -572,7 +656,8 @@ export class Race {
       {
         speedKmh: p.speed * 3.6,
         gear: p.gear,
-        boost: Math.min(1, Math.max(0, p.boostTime / 2)),
+        nitro: p.nitro,
+        nitroActive: p.nitroActive,
         drift: p.drifting ? Math.min(1, p.driftTime / 3.2) : 0,
         place: this.player.place,
         total: this.cars.length,
@@ -641,5 +726,7 @@ const TMP3 = new Vector3();
 const SMOKE = new Color(0.9, 0.9, 0.95);
 const SPARK = new Color(1.6, 0.9, 0.3);
 const SPARK_HOT = new Color(0.6, 1.6, 3.0);
-const EMBER = new Color(0.15, 0.4, 0.9);
+const EMBER = new Color(0.9, 0.45, 0.15);
+const NITRO_SPARK = new Color(0.35, 0.9, 2.6);
+const NITRO_WHITE = new Color(2.2, 2.4, 2.8);
 const PICK_COLOR = new Color(0.4, 2.2, 3.0);

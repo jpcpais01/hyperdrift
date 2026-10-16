@@ -1,6 +1,6 @@
 import type { DriveInput } from '../game/carPhysics';
 
-type Action = 'up' | 'down' | 'left' | 'right';
+type Action = 'up' | 'down' | 'left' | 'right' | 'nitro';
 
 const KEYS: Record<string, Action> = {
   ArrowUp: 'up',
@@ -11,10 +11,15 @@ const KEYS: Record<string, Action> = {
   KeyA: 'left',
   ArrowRight: 'right',
   KeyD: 'right',
+  Space: 'nitro',
+  ShiftLeft: 'nitro',
+  ShiftRight: 'nitro',
+  KeyN: 'nitro',
 };
 
 /**
- * Four controls only: forward, back (brake, then reverse), left, right.
+ * Four driving controls: forward, back (brake, then reverse), left, right,
+ * plus a nitro button.
  * Keyboard, on-screen touch buttons and gamepads all feed the same state.
  */
 export class Input {
@@ -53,6 +58,7 @@ export class Input {
         <button data-a="right" aria-label="Direita"><svg viewBox="0 0 24 24"><path d="m9 4 8 8-8 8"/></svg></button>
       </div>
       <div class="tc-group tc-right">
+        <button data-a="nitro" class="tc-nitro" aria-label="Nitro"><b>N₂O</b><i></i></button>
         <button data-a="down" class="tc-brake" aria-label="Travar / marcha-atrás"><svg viewBox="0 0 24 24"><path d="m4 9 8 8 8-8"/></svg></button>
         <button data-a="up" class="tc-gas" aria-label="Acelerar"><svg viewBox="0 0 24 24"><path d="m4 15 8-8 8 8"/></svg></button>
       </div>`;
@@ -90,6 +96,19 @@ export class Input {
     for (const b of this.buttons) b.classList.toggle('on', active.has(b.dataset.a as Action));
   }
 
+  /** Shows how full the nitro tank is on the touch button. */
+  setNitro(level: number, active: boolean) {
+    const b = this.nitroBtn;
+    if (!b) return;
+    b.style.setProperty('--n', level.toFixed(3));
+    b.classList.toggle('ready', level > 0.08);
+    b.classList.toggle('burn', active);
+  }
+
+  private get nitroBtn() {
+    return this.buttons.find((b) => b.dataset.a === 'nitro');
+  }
+
   setTouchVisible(v: boolean) {
     this.el.classList.toggle('visible', v);
   }
@@ -104,6 +123,7 @@ export class Input {
     let throttle = this.has('up') ? 1 : 0;
     let brake = this.has('down') ? 1 : 0;
     let steerTarget = (this.has('right') ? 1 : 0) - (this.has('left') ? 1 : 0);
+    let nitro = this.has('nitro') ? 1 : 0;
     const pads = navigator.getGamepads?.() ?? [];
     for (const p of pads) {
       if (!p) continue;
@@ -115,12 +135,13 @@ export class Input {
       if (p.buttons[13]?.pressed) brake = 1;
       if (p.buttons[14]?.pressed) steerTarget = -1;
       if (p.buttons[15]?.pressed) steerTarget = 1;
+      if (p.buttons[2]?.pressed || p.buttons[5]?.pressed) nitro = 1;
     }
     // digital steering is eased in so taps make small corrections
     const rate = Math.abs(steerTarget) > Math.abs(this.steerSmooth) ? 7 : 12;
     this.steerSmooth += (steerTarget - this.steerSmooth) * (1 - Math.exp(-rate * dt));
     if (Math.abs(this.steerSmooth) < 0.01 && steerTarget === 0) this.steerSmooth = 0;
-    return { throttle, brake, steer: this.steerSmooth };
+    return { throttle, brake, steer: this.steerSmooth, nitro };
   }
 
   get anyPressed(): boolean {
