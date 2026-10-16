@@ -104,7 +104,7 @@ export class Hud {
         <div class="hud-best">MELHOR --:--.---</div>
       </div>
       <canvas class="hud-map" width="180" height="180"></canvas>
-      <button class="hud-cam" aria-label="Câmara (C)" title="Câmara (C)"><svg viewBox="0 0 24 24"><path d="M3 8.5h12v9H3zM15 11.5l6-3.5v10l-6-3.5"/></svg><span class="hud-cam-dots"><i></i><i></i><i></i></span></button>
+      <button class="hud-cam" aria-label="Câmara (C)" title="Câmara (C)"><svg class="cam-ico" viewBox="0 0 24 24"><path d="M3 8.5h12v9H3zM15 11.5l6-3.5v10l-6-3.5"/></svg><svg class="wheel-ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.2"/><path d="M3.6 11.2h6.2M14.2 11.2h6.2M12 14.2v6.2"/></svg><span class="hud-cam-dots"><i></i><i></i><i></i></span></button>
       <button class="hud-pause" aria-label="Pausa"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
       <div class="hud-br">
         <div class="hud-speed"><span class="v">0</span><small>km/h</small></div>
@@ -171,7 +171,7 @@ export class Hud {
     });
   }
 
-  /** Lights one dot per zoom step: near = 1, medium = 2, far = 3. */
+  /** Lights one dot per zoom step: near = 1, medium = 2, far = 3; the cockpit shows a steering wheel. */
   setCameraZoom(level: number, announce: string | null = null) {
     this.camBtn.dataset.zoom = String(level);
     if (announce) this.message(announce, 1.1);

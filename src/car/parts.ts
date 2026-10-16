@@ -3,6 +3,7 @@
  * are generated geometry that snaps onto the common skeleton (see skeleton.ts),
  * the technical ones change the driving stats (see stats.ts).
  */
+import { ALL_INTERIOR_SLOTS, DEFAULT_INTERIOR, interiorOptionsFor, isInteriorSlot, type InteriorSlot } from './interiorParts';
 
 export type GeoSlot = 'body' | 'front' | 'rear' | 'hood' | 'skirts' | 'spoiler' | 'rims' | 'headlights' | 'exhaust';
 
@@ -13,7 +14,7 @@ export type VisualSlot = GeoSlot | 'paint' | 'vinyl' | 'vinylColor' | 'rimColor'
 
 export type TechSlot = 'engine' | 'turbo' | 'nitro' | 'tires' | 'suspension' | 'weight';
 
-export type Slot = VisualSlot | TechSlot;
+export type Slot = VisualSlot | TechSlot | InteriorSlot;
 
 export interface PartOption {
   id: string;
@@ -296,9 +297,11 @@ export const DEFAULT_BUILD: CarBuild = {
   tires: 'street',
   suspension: 'sport',
   weight: 'std',
+  ...DEFAULT_INTERIOR,
 };
 
 export function optionsFor(slot: Slot): PartOption[] {
+  if (isInteriorSlot(slot)) return interiorOptionsFor(slot);
   if (slot === 'paint') return PAINTS;
   if ((PAINT_ZONE_SLOTS as string[]).includes(slot)) return [SAME_PAINT, ...PAINTS];
   if (slot === 'vinylColor') return VINYL_COLORS;
@@ -321,7 +324,7 @@ export function techById(slot: TechSlot, id: string): TechOption {
   return TECH_PARTS[slot].find((o) => o.id === id) ?? TECH_PARTS[slot][0];
 }
 
-export const ALL_SLOTS: Slot[] = [...ALL_VISUAL, ...TECH_SLOTS.map((s) => s.slot)];
+export const ALL_SLOTS: Slot[] = [...ALL_VISUAL, ...TECH_SLOTS.map((s) => s.slot), ...ALL_INTERIOR_SLOTS];
 
 /** Makes sure a stored build only references parts that exist. */
 export function sanitizeBuild(b: Partial<CarBuild> | null | undefined): CarBuild {

@@ -70,7 +70,7 @@ export class MultiplayerScreen {
           <button class="mp-choice" data-a="join"><span class="mp-ico mp-ico-join"></span><b>Entrar com código</b><small>Escreve os ${CODE_LENGTH} números da sala</small></button>
         </div>
         <p class="mp-notice"></p>
-        <button class="btn small mp-back" data-a="back">‹ Menu</button>
+        <button class="btn small mp-back" data-a="back" data-back>‹ Menu</button>
       </div>
       <div class="mp-join mp-view">
         <h2 class="mp-title">Código da sala</h2>
@@ -83,7 +83,7 @@ export class MultiplayerScreen {
               ? '<button data-k="ok" class="ok" aria-label="Entrar"><svg viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></svg></button>'
               : `<button data-k="${k}">${k}</button>`,
         ).join('')}</div>
-        <button class="btn small mp-back" data-a="home">‹ Voltar</button>
+        <button class="btn small mp-back" data-a="home" data-back>‹ Voltar</button>
       </div>
       <div class="mp-lobby mp-view"></div>
       <div class="mp-busy"><div class="mp-spin"></div><p></p></div>`;

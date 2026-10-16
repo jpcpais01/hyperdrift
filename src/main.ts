@@ -1,3 +1,6 @@
+import '@fontsource-variable/saira/standard.css';
+import '@fontsource-variable/saira/standard-italic.css';
+import '@fontsource-variable/inter/wght.css';
 import './style.css';
 import { randomBuild, sanitizeBuild, type CarBuild } from './car/parts';
 import { audio } from './core/audio';
@@ -16,6 +19,8 @@ import { storage } from './storage';
 import { FpsCounter } from './ui/fps';
 import { Hud } from './ui/hud';
 import { ControlsPanel, GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
+import { nav } from './ui/nav';
+import { computeStats, displayStats } from './car/stats';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
 import { FreeRoam, ZoneWorld, type ZonePayload } from './zone/freeRoam';
@@ -187,6 +192,7 @@ class App {
       this.garageScene.setBuild(b);
       this.garageScene.preview(b, slot);
     };
+    this.garage.onView = (interior, slot) => this.garageScene.setView(interior, slot);
     this.garage.onBack = () => this.go(this.room ? 'mp' : 'menu');
     this.garage.onRace = () => (this.room ? this.go('mp') : this.startRace(this.raceMode === 'attract' ? 'race' : this.raceMode));
     this.results.onAgain = () => (this.room ? this.go('mp') : this.startRace(this.raceMode));
@@ -198,10 +204,11 @@ class App {
       this.setPaused(!this.race.paused);
     };
     this.input.onPause = togglePause;
+    nav.onStart = togglePause;
     const cycleCamera = () => {
       const live = this.state === 'zone' ? this.zone : this.state === 'race' ? this.race : null;
       if (!live || live.paused) return;
-      this.settings.camZoom = ((this.settings.camZoom + 1) % 3) as CameraZoom;
+      this.settings.camZoom = ((this.settings.camZoom + 1) % 4) as CameraZoom;
       storage.saveSettings(this.settings);
       live.setCameraZoom(this.settings.camZoom);
       this.hud.setCameraZoom(this.settings.camZoom, `CÂMARA · ${CAMERA_ZOOM_LABELS[this.settings.camZoom]}`);
@@ -222,11 +229,13 @@ class App {
       if (this.state === 'zone' && this.zone && !this.zone.paused && !this.zone.inputLocked) this.setPaused(true);
     });
 
+    nav.init();
     this.go('menu');
     // invite links: /?sala=1234 opens the room straight away
     const invite = codeFromUrl(location.search);
     if (invite) {
       history.replaceState(null, '', location.pathname + (LAN ? '?lan' : ''));
+      this.menu.skipTitle();
       this.go('mp');
       this.mp.prefill(invite);
       void this.joinRoom(invite);
@@ -275,6 +284,7 @@ class App {
   }
 
   private go(state: State) {
+    this.renderer.setOverlay(null);
     // the menu and the lobby share a live backdrop; an online race keeps running behind the lobby
     const keepZone = !!this.zone?.net && state === 'mp' && !!this.room;
     const keep =
@@ -285,6 +295,7 @@ class App {
     else this.endRace();
     this.garageScene.stopPreview();
     this.state = state;
+    if (state === 'menu') this.menu.setInfo(storage.loadRecords().bestLap, displayStats(computeStats(this.build)), storage.loadBestDrift());
     this.menu.show(state === 'menu');
     this.mp.show(state === 'mp');
     if (state === 'mp') this.mp.renderLobby(this.liveOnline());
@@ -329,6 +340,7 @@ class App {
   /** The drift zone: on my own, or the room's (session) with everybody in it. */
   private startZone(session: SessionInfo | null = null) {
     this.endRace();
+    this.renderer.setOverlay(null);
     this.hideScreens();
     this.state = 'zone';
     if (!this.zoneWorld) this.zoneWorld = new ZoneWorld(this.sky);
@@ -346,6 +358,7 @@ class App {
 
   private startRace(mode: RaceMode, session: SessionInfo | null = null) {
     this.endRace();
+    this.renderer.setOverlay(null);
     this.garageScene.stopPreview();
     this.raceMode = mode;
     this.state = 'race';
@@ -554,6 +567,7 @@ class App {
   }
 
   private frame = (now: number) => {
+    nav.inRace = this.state === 'race';
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     this.time += dt;
@@ -565,6 +579,8 @@ class App {
     if (this.state === 'garage') {
       const panel = window.innerWidth > 900 ? 1.7 : 2.0;
       this.garageScene.update(dt, this.time, this.renderer.camera, this.sky, isPortrait() ? 0 : panel);
+      this.renderer.setOverlay(this.garageScene.overlay);
+      this.garageScene.renderMirror(this.renderer.gl);
     } else if (this.zone) {
       this.zone.update(needRotate && !this.zone.net ? 0 : dt, this.renderer);
     } else if (this.race) {

@@ -1,5 +1,7 @@
 import { Color, PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
+import { Cockpit } from '../car/cockpit';
+import { isTouch } from '../core/fullscreen';
 import { paintById, randomBuild, type CarBuild } from '../car/parts';
 import { computeStats, type CarStats } from '../car/stats';
 import { engineProfile } from '../audio/engineProfile';
@@ -139,6 +141,8 @@ export class Race {
   private scrapeCooldown = 0;
   private player: RaceCar | null = null;
   private chase = new ChaseCamera();
+  /** the player's interior, for the first-person camera */
+  private cockpit: Cockpit | null = null;
   private countdown: number;
   private lastCount = -1;
   time = 0;
@@ -258,6 +262,7 @@ export class Race {
       world.scene.add(this.ghostVisual.root);
     }
     if (this.player) {
+      this.cockpit = new Cockpit(this.player.build, isTouch(), world.sky.envMap);
       this.startAudio();
       hud?.setTrack(track);
       hud?.show(true, mode === 'timetrial' ? 'timetrial' : 'race');
@@ -445,6 +450,10 @@ export class Race {
         this.collide();
       }
     }
+    // draw every car where it is *now*, between two physics steps, not where the
+    // last step left it: otherwise frames that fit 1 or 3 steps instead of 2 judder
+    const alpha = racing ? this.acc / FIXED : 1;
+    for (const c of this.cars) if (!c.gone) c.physics.interpolate(c.remote ? 1 : alpha);
 
     if (racing && this.player && this.player.lap >= 1 && !this.player.finished) {
       this.recorder.record(dt, this.player.physics.pos, this.player.physics.quat);
@@ -477,12 +486,16 @@ export class Race {
 
     // camera
     const t = performance.now() / 1000;
+    const cockpit = this.player && !this.spectate && this.chase.inCockpit ? this.cockpit : null;
     if (this.mode === 'attract' || this.spectate) this.updateAttractCamera(camera, dt, t);
+    else if (cockpit && this.player) this.updateCockpit(cockpit, this.player, camera, dt, t, racing);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
+    renderer.setOverlay(cockpit ? cockpit.scene : null);
     this.world.decor.update(dt, camera.position);
     // shadows follow the player (or whatever the attract camera is looking at)
     const focus = this.player ? this.player.physics.pos : camera.getWorldDirection(scratchFocus).multiplyScalar(18).add(camera.position);
     this.world.sky.update(t, camera.position, 20, focus);
+    cockpit?.renderMirror(renderer.gl, this.world.scene);
 
     // post fx + audio + hud
     this.updateTags(camera);
@@ -810,8 +823,8 @@ export class Race {
       if (c.gone) continue;
       const p = c.physics;
       const v = c.visual;
-      v.root.position.copy(p.pos);
-      v.root.quaternion.copy(p.quat);
+      v.root.position.copy(p.draw.pos);
+      v.root.quaternion.copy(p.draw.quat);
       if (c.remote) {
         c.netOffset.multiplyScalar(1 - ease);
         c.netQuat.slerp(IDENTITY, ease);
@@ -831,6 +844,24 @@ export class Race {
     }
   }
 
+  private updateCockpit(cockpit: Cockpit, car: RaceCar, camera: PerspectiveCamera, dt: number, t: number, racing: boolean) {
+    const p = car.physics;
+    cockpit.follow(car.visual.body);
+    this.chase.updateCockpit(camera, p, car.visual.body, cockpit.eye, dt, t);
+    cockpit.update(dt, {
+      steer: p.steerVisual + (p.drifting ? p.driftDir * 0.35 : 0),
+      rpm: p.rpm,
+      gear: p.gear,
+      speed: p.forwardSpeed,
+      nitro: p.nitro,
+      nitroActive: p.nitroActive,
+      limiter: p.drivetrain.limiter,
+      drifting: p.drifting,
+      latAccel: p.yawRate * p.speed,
+      parked: racing ? 0 : 1,
+    });
+  }
+
   setCameraZoom(level: CameraZoom, instant = false) {
     this.chase.setZoom(level, instant);
   }
@@ -843,10 +874,11 @@ export class Race {
       while (this.cars[this.attractTarget].gone && this.live.length) this.attractTarget = (this.attractTarget + 1) % this.cars.length;
       this.chase.snap();
     }
-    const car = this.cars[this.attractTarget].physics;
+    const physics = this.cars[this.attractTarget].physics;
+    const car = physics.draw;
     const phase = Math.floor(t / 7) % 3;
     if (phase === 0) {
-      this.chase.update(cam, car, dt, t);
+      this.chase.update(cam, physics, dt, t);
     } else {
       // orbiting cinematic shot
       const a = t * 0.35;
@@ -951,6 +983,8 @@ export class Race {
       this.world.scene.remove(this.ghostVisual.root);
       this.ghostVisual.dispose();
     }
+    this.cockpit?.dispose();
+    this.cockpit = null;
     if (this.player) audio.stopEngine();
     this.hud?.show(false);
     this.hud?.setCountdown('');

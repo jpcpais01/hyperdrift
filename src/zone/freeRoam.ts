@@ -1,9 +1,11 @@
 import { Color, PerspectiveCamera, Quaternion, Scene, Vector3 } from 'three';
 import { buildCar, type CarVisual } from '../car/carBuilder';
+import { Cockpit } from '../car/cockpit';
 import { paintById, randomBuild, type CarBuild } from '../car/parts';
 import { computeStats, type CarStats } from '../car/stats';
 import { engineProfile } from '../audio/engineProfile';
 import { audio } from '../core/audio';
+import { isTouch } from '../core/fullscreen';
 import type { Input } from '../core/input';
 import type { Renderer } from '../core/renderer';
 import { collideCars, type CarContact } from '../game/carCollision';
@@ -113,6 +115,7 @@ export class FreeRoam {
   private contacts: CarContact[] = [];
   private player: ZoneCar;
   private chase = new ChaseCamera();
+  private cockpit: Cockpit;
   readonly score: DriftScore;
   private acc = 0;
   private time = 0;
@@ -175,6 +178,7 @@ export class FreeRoam {
     this.player.physics.events.length = 0;
     this.player.physics.nitro = 0.6;
 
+    this.cockpit = new Cockpit(playerBuild, isTouch(), world.sky.envMap);
     this.startAudio();
     hud.setZoneMap(L);
     hud.show(true, 'zone');
@@ -458,6 +462,9 @@ export class FreeRoam {
       for (const c of this.cars) if (!c.remote || c.visual.root.visible) c.physics.step(FIXED, c.lastInput);
       this.collide();
     }
+    // draw between the last two physics steps (snapshot-driven cars are drawn where they were put)
+    const alpha = this.acc / FIXED;
+    for (const c of this.cars) c.physics.interpolate(c.remote ? 1 : alpha);
     if (this.net) this.netSend(dt);
 
     const p = this.player.physics;
@@ -486,12 +493,16 @@ export class FreeRoam {
     this.world.particles.update(dt);
 
     // camera
+    const cockpit = !this.spectate && this.intro <= 0 && this.chase.inCockpit ? this.cockpit : null;
     if (this.spectate) this.updateOrbitCamera(camera, dt);
     else if (this.intro > 0) this.updateIntroCamera(camera, t);
+    else if (cockpit) this.updateCockpit(cockpit, camera, dt, t);
     else this.chase.update(camera, p, dt, t);
+    renderer.setOverlay(cockpit ? cockpit.scene : null);
     this.world.decor.update(dt, camera.position);
     this.world.view.update(dt, this.time, camera.position, p.pos);
     this.world.sky.update(t, camera.position, 20, p.pos);
+    cockpit?.renderMirror(renderer.gl, this.world.scene);
 
     if (this.spectate) {
       renderer.setSpeedFx(0, 0);
@@ -521,6 +532,25 @@ export class FreeRoam {
       dt,
     );
     this.input.setNitro(p.nitro, p.nitroActive);
+  }
+
+  private updateCockpit(cockpit: Cockpit, camera: PerspectiveCamera, dt: number, t: number) {
+    const p = this.player.physics;
+    const body = this.player.visual.body;
+    cockpit.follow(body);
+    this.chase.updateCockpit(camera, p, body, cockpit.eye, dt, t);
+    cockpit.update(dt, {
+      steer: p.steerVisual + (p.drifting ? p.driftDir * 0.35 : 0),
+      rpm: p.rpm,
+      gear: p.gear,
+      speed: p.forwardSpeed,
+      nitro: p.nitro,
+      nitroActive: p.nitroActive,
+      limiter: p.drivetrain.limiter,
+      drifting: p.drifting,
+      latAccel: p.yawRate * p.speed,
+      parked: this.spectate || this.inputLocked ? 1 : 0,
+    });
   }
 
   /** Behind the lobby: a slow circle around my parked car. */
@@ -723,6 +753,7 @@ export class FreeRoam {
     }
     this.tags?.remove();
     this.hud.setZoneBoard(null);
+    this.cockpit.dispose();
     for (const c of this.cars) {
       if (c.voice && !c.isPlayer) audio.stopVoice(c.voice);
       this.world.scene.remove(c.visual.root);

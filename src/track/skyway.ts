@@ -6,6 +6,9 @@ import type { SegmentDef } from './track';
  * Headings close to exactly 360 degrees; the two "closure" straights were
  * solved with scripts/solve.ts so the lap meets itself.
  */
+/** the corkscrew rolls round the tunnel's axis, this high above the deck */
+const HEARTLINE = 16;
+
 export const SKYWAY: SegmentDef[] = [
   { len: 150 },
   { len: 130, yaw: -40, bank: 10, pickups: true },
@@ -31,9 +34,9 @@ export const SKYWAY: SegmentDef[] = [
   { len: 190, yaw: 90, bank: -20 },
   { len: 50, bank: 0 },
   // corkscrew light tunnel (closure straight A)
-  { len: 40, tunnel: true },
-  { len: 230, bank: 360, tunnel: true },
-  { len: 40, tunnel: true },
+  { len: 40, tunnel: true, heartline: HEARTLINE },
+  { len: 230, bank: 360, tunnel: true, heartline: HEARTLINE },
+  { len: 40, tunnel: true, heartline: HEARTLINE },
   { len: 208, boost: true },
   { len: 210, yaw: 90, pitch: -4, bank: -18 },
   { len: 50, pitch: 0, bank: 0 },

@@ -96,8 +96,8 @@ export function emitWallFx(parts: Particles, p: CarPhysics, side: Vector3) {
 
 /** Visual pose of a car from its physics: body, suspension, wheels, brake lights, exhaust flames. */
 export function poseCar(p: CarPhysics, v: CarVisual, brake: number, dt: number, fxTime: number) {
-  v.root.position.copy(p.pos);
-  v.root.quaternion.copy(p.quat);
+  v.root.position.copy(p.draw.pos);
+  v.root.quaternion.copy(p.draw.quat);
   v.body.rotation.set(p.pitch, 0, p.roll);
   v.body.position.y = p.heave * 0.5;
   const counter = p.drifting ? p.driftDir * 0.35 : 0;
