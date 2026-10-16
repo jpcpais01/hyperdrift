@@ -36,6 +36,7 @@ import {
   type ShellInfo,
 } from './geometry';
 import { ExhaustFx } from './exhaustFx';
+import { Underglow } from './underglow';
 import { createCarMaterials, getSharedMaterials, type CarMaterials, type PaintLayout } from './materials';
 import type { CarBuild } from './parts';
 import { skeletonFor, TRAVEL } from './skeleton';
@@ -57,6 +58,8 @@ export interface CarVisual {
   exhaustTips: Vector3[];
   /** flames, pops and nitro (null for the ghost) */
   exhaust: ExhaustFx | null;
+  /** LED tubes under the car and their light on the road (null when off, and for the ghost) */
+  underglow: Underglow | null;
   /** world position of exhaust tip i */
   tipWorld(i: number, out: Vector3): Vector3;
   updateWheels(state: WheelState): void;
@@ -216,6 +219,12 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     root.add(exhaust.glow);
   }
 
+  const underglow = opts.ghost || build.underglow === 'none' ? null : new Underglow(build, hitbox);
+  if (underglow) {
+    body.add(underglow.strips);
+    root.add(underglow.pool);
+  }
+
   // wheels: instanced, 4 per car, drawn at the rear wheel's size; the front pair is scaled to its own
   const rimR = K.rear.r * K.rimShare;
   const toWheel = (g: BufferGeometry) => g.scale(K.rear.width / RIM_W, rimR / RIM_R, rimR / RIM_R);
@@ -266,6 +275,7 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     hitbox,
     exhaustTips,
     exhaust,
+    underglow,
     tipWorld(i: number, out: Vector3) {
       body.updateWorldMatrix(true, false);
       return body.localToWorld(out.copy(exhaustTips[i % Math.max(1, exhaustTips.length)] ?? _p.set(0, 0.3, -2.2)));
@@ -294,6 +304,7 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     },
     dispose() {
       exhaust?.dispose();
+      underglow?.dispose();
       for (const g of owned) g.dispose();
       mats.dispose();
       ghostMat?.dispose();
