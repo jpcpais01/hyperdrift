@@ -17,6 +17,19 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { SUN_DIR } from '../world/atmosphere';
 
 /**
+ * Guard against NaN/Inf pixels in the HDR buffer. A single bad pixel (a shader
+ * edge case, or a highlight overflowing half float) gets smeared by the bloom's
+ * blur chain into a huge flat block, and a NaN alpha lets the page show through.
+ * max/min drop NaN on D3D and most GL drivers; isnan covers the rest.
+ */
+const SANITIZE_GLSL = /* glsl */ `
+  vec3 hdSafe(vec3 c) {
+    c = min(max(c, vec3(0.0)), vec3(6e4));
+    return vec3(isnan(c.r) ? 0.0 : c.r, isnan(c.g) ? 0.0 : c.g, isnan(c.b) ? 0.0 : c.b);
+  }
+`;
+
+/**
  * Final HDR pass (before tone mapping), one full-screen draw:
  * - cheap radial motion blur + vignette driven by speed/boost (8 taps, skipped when slow)
  * - sun glare: halo, anamorphic streak and lens ghosts, occluded by sampling the
@@ -53,6 +66,7 @@ const FinalShader = {
     uniform float uSaturation;
     varying vec2 vUv;
     float luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+    ${SANITIZE_GLSL}
     void main() {
       vec2 dir = vUv - uCenter;
       float d = length(dir);
@@ -100,7 +114,7 @@ const FinalShader = {
       }
 
       // grading in linear HDR (the output pass tone maps afterwards)
-      vec3 c = max(col.rgb, 0.0);
+      vec3 c = hdSafe(col.rgb);
       float l = luma(c);
       c = mix(vec3(l), c, uSaturation);
       const float MID = -2.47; // log2(0.18)
@@ -110,7 +124,7 @@ const FinalShader = {
       float v = smoothstep(0.85, 0.25, d * (1.0 + uAmount * 0.25));
       c *= mix(1.0 - uVignette, 1.0, v);
       c += vec3(0.1, 0.35, 0.6) * uTint * smoothstep(0.35, 0.8, d);
-      gl_FragColor = vec4(c, col.a);
+      gl_FragColor = vec4(hdSafe(c), 1.0);
     }
   `,
 };
@@ -155,6 +169,13 @@ export class Renderer {
     this.renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(this.renderPass);
     this.bloom = new UnrealBloomPass(new Vector2(256, 256), 0.32, 0.45, 1.3);
+    // sanitize what the bloom reads, so a bad pixel can never spread across the screen
+    const hp = this.bloom.materialHighPassFilter;
+    hp.fragmentShader = hp.fragmentShader
+      .replace('void main()', `${SANITIZE_GLSL}\nvoid main()`)
+      .replace(/vec4 texel = texture2D\( tDiffuse, vUv \);/, 'vec4 texel = texture2D( tDiffuse, vUv ); texel = vec4( hdSafe( texel.rgb ), 1.0 );');
+    if (!hp.fragmentShader.includes('hdSafe( texel')) console.warn('bloom sanitize patch did not apply');
+    hp.needsUpdate = true;
     this.composer.addPass(this.bloom);
     this.speed = new ShaderPass(FinalShader);
     this.composer.addPass(this.speed);
