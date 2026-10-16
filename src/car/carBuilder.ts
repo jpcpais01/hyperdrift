@@ -118,7 +118,8 @@ function cached<T>(cache: Map<string, T>, key: string, size: number, make: () =>
 export function buildCarGeometry(build: CarBuild): CarGeometry {
   const key = [build.body, build.front, build.rear, build.hood, build.skirts, build.spoiler, build.headlights, build.exhaust].join('|');
   return cached(geoCache, key, 8, () => {
-    const shell = cached(shellCache, `${build.body}|${build.front}|${build.rear}`, 4, () => shellPart(build.body, build.front, build.rear));
+    const dome = build.hood === 'smooth';
+    const shell = cached(shellCache, `${build.body}|${build.front}|${build.rear}|${dome}`, 4, () => shellPart(build.body, build.front, build.rear, dome));
     const s = shell.surface;
     const cabin = cabinPart(build.body, shell);
     const front = frontPart(build.front, shell);

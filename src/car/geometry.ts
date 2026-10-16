@@ -325,12 +325,13 @@ function endInfo(fine: Section[], side: 1 | -1): EndInfo {
  * seamless surface. Fender flares, scallops and wheel wells are then sculpted
  * into it at the skeleton's axles.
  */
-export function shellPart(bodyId: string, frontId: string, rearId: string): ShellInfo {
+export function shellPart(bodyId: string, frontId: string, rearId: string, dome = false): ShellInfo {
   const body = bodySections(bodyId);
   const keys = [...rearSections(rearId, body.rearJoint), ...body.hull, ...frontSections(frontId, body.frontJoint)];
   const fine = refine(keys, (len) => len / 0.032);
   const sc = body.sculpt;
   const g = loft(fine, { capStart: true, capEnd: true, ring: 46 });
+  if (dome) powerDome(g, body.cabin[0].z + 0.1, frontSections(frontId, body.frontJoint).at(-1)!.z - 0.4);
   const uncut = g.clone();
   g.setAttribute('zone', new BufferAttribute(sculpt(g, sc), 1));
   g.computeVertexNormals();
@@ -422,6 +423,26 @@ export function shellPart(bodyId: string, frontId: string, rearId: string): Shel
   };
   bodyFeatures(shell);
   return shell;
+}
+
+/** Raises a long, softly blended power dome along the hood's centre line, as part of the skin itself. */
+function powerDome(g: BufferGeometry, z0: number, z1: number) {
+  const pos = g.getAttribute('position') as BufferAttribute;
+  const uv = g.getAttribute('uv') as BufferAttribute;
+  for (let i = 0; i < pos.count; i++) {
+    const z = pos.getZ(i);
+    if (z <= z0 || z >= z1) continue;
+    // only the top of each section (the ring runs bottom centre -> top centre -> bottom centre)
+    const top = 1 - smooth(0.08, 0.12, Math.abs(uv.getX(i) - 0.5));
+    if (top <= 0) continue;
+    const u = (z - z0) / (z1 - z0);
+    // swells quickly from the windscreen, tapers long towards the nose
+    const along = Math.sin(Math.PI * Math.min(1, u * 1.15)) ** 0.7 * smooth(0, 0.18, u);
+    const x = pos.getX(i);
+    const across = Math.exp(-((x / 0.23) ** 4));
+    pos.setY(i, pos.getY(i) + 0.034 * along * across * top);
+  }
+  pos.needsUpdate = true;
 }
 
 /** z of the B-pillar: a little behind the middle of the side glass. */
@@ -591,7 +612,7 @@ export function cabinPart(id: string, shell: ShellInfo): PartGeo {
     cabinPatch(fine, 0.72, 1.0, zRg - 0.04, zWs + 0.04, 0.006, 8),
     // A-pillar
     cabinPatch(fine, 0.6, 0.76, zWs + 0.02, zFront - 0.015, 0.006, 4),
-    // C-pillar (sail panel), with a little quarter window cut out of its front
+    // C-pillar (sail panel)
     cabinPatch(fine, 0.49, 0.76, zBack + 0.01, zSideBack, 0.006, 6),
     // B-pillar
     cabinPatch(fine, 0.49, 0.74, zB - 0.035, zB + 0.035, 0.006, 4, 0.035),
@@ -967,17 +988,7 @@ export function hoodPart(id: string, surface: Surface, hoodStart: number, hoodEn
     }
     g.paint.push(zoned(loft(secs, { capStart: true, capEnd: true }), ZONE.hood));
   } else {
-    // power bulge with two sharp creases
-    const secs: Section[] = [];
-    for (let i = 0; i <= 8; i++) {
-      const t = i / 8;
-      const z = z0 + len * t;
-      const y = topAt(0, z);
-      const k = Math.sin(t * Math.PI) ** 0.5;
-      secs.push({ z, yb: y - 0.03, wb: 0.32 * k + 0.02, ys: y + 0.005, ws: 0.36 * k + 0.02, yt: y + 0.012 + 0.022 * k, wt: 0.22 * k + 0.01, crisp: 0.95 });
-    }
-    g.paint.push(zoned(loft(secs, { capStart: true, capEnd: true }), ZONE.hood));
-    // washer jets
+    // smooth: the power dome is sculpted into the shell itself (see shellPart); just the washer jets here
     for (const x of [0.12, -0.12]) g.trim.push(place(rbox(0.03, 0.015, 0.03, 0.006), [x, topAt(x, z0 - 0.03) + 0.006, z0 - 0.03]));
   }
   return g;

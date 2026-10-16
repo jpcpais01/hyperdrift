@@ -6,6 +6,12 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-16 19:00 UTC',
+    entries: [
+      "Car bodies redesigned from the ground up: each body now has its own silhouette, with fenders rising above a sunken hood, muscular rear haunches, a waist along the doors and a stance that sits lower and wider. The GT gets fender gills, the Hyper Cunha deep flank intakes and engine-cover louvres. Every lamp, grille, intake and vent is now moulded onto the curve of the body instead of sitting on top of it, with new LED, projector and hooked headlight designs, wrap-around and C-shaped tail lights, mesh intakes, chrome bezels, dark arch liners, bigger wheels and a smooth power-dome hood. Any mix of parts still fits.",
+    ],
+  },
+  {
     hour: '2026-10-16 18:00 UTC',
     entries: [
       'Phones and tablets now get the full PC graphics: real-time sun shadows, anti-aliasing, the detailed cloud layer and sharper resolution. New RESOLUÇÃO option on the menu (and in pause): AUTO keeps the frame rate smooth by adjusting sharpness on the fly, or lock it to 50%, 75% or 100%. Your choice is remembered.',
