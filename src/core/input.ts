@@ -1,4 +1,7 @@
 import type { DriveInput } from '../game/carPhysics';
+import { TiltSteer } from './tilt';
+
+export type ControlMode = 'buttons' | 'tilt';
 
 type Action = 'up' | 'down' | 'left' | 'right';
 
@@ -22,6 +25,11 @@ export class Input {
   private touch = new Map<number, Action>();
   private steerSmooth = 0;
   readonly el: HTMLElement;
+  readonly tilt = new TiltSteer();
+  private mode: ControlMode = 'buttons';
+  private meter: HTMLElement;
+  private meterDot: HTMLElement;
+  private meterFill: HTMLElement;
   onPause: (() => void) | null = null;
   onCamera: (() => void) | null = null;
 
@@ -55,8 +63,24 @@ export class Input {
       <div class="tc-group tc-right">
         <button data-a="down" class="tc-brake" aria-label="Travar / marcha-atrás"><svg viewBox="0 0 24 24"><path d="m4 9 8 8 8-8"/></svg></button>
         <button data-a="up" class="tc-gas" aria-label="Acelerar"><svg viewBox="0 0 24 24"><path d="m4 15 8-8 8 8"/></svg></button>
+      </div>
+      <div class="tc-tilt" role="button" aria-label="Recentrar inclinação">
+        <div class="tc-tilt-track"><i class="tc-tilt-fill"></i><i class="tc-tilt-dot"></i></div>
+        <small>TOCA PARA RECENTRAR</small>
       </div>`;
     root.appendChild(this.el);
+    this.meter = this.el.querySelector('.tc-tilt')!;
+    this.meterDot = this.el.querySelector('.tc-tilt-dot')!;
+    this.meterFill = this.el.querySelector('.tc-tilt-fill')!;
+    this.meter.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this.tilt.calibrate();
+      this.onRecenter?.(this.tilt.center);
+      this.meter.classList.remove('flash');
+      void this.meter.offsetWidth;
+      this.meter.classList.add('flash');
+    });
     const buttons = Array.from(this.el.querySelectorAll('button'));
     // A finger can slide between buttons: resolve the button under each pointer on every move.
     const resolve = (e: PointerEvent) => {
@@ -66,6 +90,7 @@ export class Input {
       this.refresh();
     };
     this.el.addEventListener('pointerdown', (e) => {
+      if (this.meter.contains(e.target as Node)) return;
       e.preventDefault();
       this.el.setPointerCapture?.(e.pointerId);
       resolve(e);
@@ -84,6 +109,38 @@ export class Input {
   }
 
   private buttons: HTMLButtonElement[];
+  onRecenter: ((center: number) => void) | null = null;
+
+  /** Switch between on-screen steering buttons and tilt steering. */
+  setMode(m: ControlMode) {
+    this.mode = m;
+    if (m === 'tilt') this.tilt.listen();
+    else this.tilt.stop();
+    this.tilt.reset();
+  }
+
+  get controlMode(): ControlMode {
+    return this.mode;
+  }
+
+  private tiltShown = false;
+
+  /** Tilt layout: steering buttons hide, brake moves under the left thumb, gas stays right. */
+  private showTilt(on: boolean) {
+    this.tiltShown = on;
+    this.el.classList.toggle('tilt', on);
+    const brake = this.el.querySelector('.tc-brake')!;
+    const group = this.el.querySelector(on ? '.tc-left' : '.tc-right')!;
+    if (on) group.appendChild(brake);
+    else group.insertBefore(brake, group.firstChild);
+    // a finger resting on a button that just hid must not keep steering
+    for (const [id, a] of this.touch) if (on && (a === 'left' || a === 'right')) this.touch.delete(id);
+    this.refresh();
+  }
+
+  private get tiltActive(): boolean {
+    return this.mode === 'tilt' && this.tilt.live;
+  }
 
   private refresh() {
     const active = new Set(this.touch.values());
@@ -92,6 +149,7 @@ export class Input {
 
   setTouchVisible(v: boolean) {
     this.el.classList.toggle('visible', v);
+    this.showTilt(this.tiltActive);
   }
 
   private has(a: Action): boolean {
@@ -116,11 +174,30 @@ export class Input {
       if (p.buttons[14]?.pressed) steerTarget = -1;
       if (p.buttons[15]?.pressed) steerTarget = 1;
     }
+    // if the sensor goes quiet (denied, unsupported, phone flat) the steering buttons come back
+    const tilting = this.tiltActive;
+    if (tilting !== this.tiltShown) this.showTilt(tilting);
+    if (tilting) {
+      const t = this.tilt.read(dt);
+      this.updateMeter(t);
+      // keys/pad still win when used, otherwise the wheel is analog and needs no easing
+      if (steerTarget === 0) {
+        this.steerSmooth = t;
+        return { throttle, brake, steer: t };
+      }
+    }
     // digital steering is eased in so taps make small corrections
     const rate = Math.abs(steerTarget) > Math.abs(this.steerSmooth) ? 7 : 12;
     this.steerSmooth += (steerTarget - this.steerSmooth) * (1 - Math.exp(-rate * dt));
     if (Math.abs(this.steerSmooth) < 0.01 && steerTarget === 0) this.steerSmooth = 0;
     return { throttle, brake, steer: this.steerSmooth };
+  }
+
+  private updateMeter(t: number) {
+    const pct = t * 50;
+    this.meterDot.style.transform = `translateX(${pct * 1.6}px)`;
+    this.meterFill.style.transform = `scaleX(${t})`;
+    this.meter.classList.toggle('full', Math.abs(t) > 0.98);
   }
 
   get anyPressed(): boolean {
@@ -131,6 +208,7 @@ export class Input {
     this.keys.clear();
     this.touch.clear();
     this.steerSmooth = 0;
+    this.tilt.reset();
     this.refresh();
   }
 }

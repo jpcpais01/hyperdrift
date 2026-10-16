@@ -10,6 +10,8 @@ import {
 } from '../car/parts';
 import { computeStats, displayStats, type DisplayStats } from '../car/stats';
 import { audio } from '../core/audio';
+import type { ControlMode, Input } from '../core/input';
+import { TILT_LOCK_DEG, TILT_SENS_LABELS, type TiltSens } from '../core/tilt';
 import type { RaceResult } from '../game/race';
 import { formatTime } from './hud';
 
@@ -32,8 +34,9 @@ export class MenuScreen {
   onTimeTrial: (() => void) | null = null;
   onGarage: (() => void) | null = null;
   onToggleSound: (() => boolean) | null = null;
+  onControls: (() => void) | null = null;
 
-  constructor(root: HTMLElement, muted: boolean) {
+  constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null) {
     this.el = h('div', 'screen menu hidden');
     this.el.innerHTML = `
       <div class="menu-inner">
@@ -47,6 +50,7 @@ export class MenuScreen {
       </div>
       <div class="menu-foot">
         <button class="btn-icon" data-a="sound" aria-label="Som">${muted ? 'SOM: DESLIGADO' : 'SOM: LIGADO'}</button>
+        ${controlsLabel ? `<button class="btn-icon" data-a="controls">${controlsLabel}</button>` : ''}
         <button class="btn-icon" data-a="notes">PATCH NOTES</button>
         <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · travar a curvar = drift · C câmara</span>
       </div>
@@ -68,6 +72,7 @@ export class MenuScreen {
       if (a === 'race') this.onRace?.();
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
+      if (a === 'controls') this.onControls?.();
       if (a === 'notes' || a === 'notes-close') this.el.querySelector('.notes')!.classList.toggle('hidden', a === 'notes-close');
       if (a === 'sound' && this.onToggleSound) {
         const m = this.onToggleSound();
@@ -79,6 +84,11 @@ export class MenuScreen {
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
     if (!v) this.el.querySelector('.notes')!.classList.add('hidden');
+  }
+
+  setControlsLabel(label: string) {
+    const b = this.el.querySelector('[data-a="controls"]');
+    if (b) b.textContent = label;
   }
 }
 
@@ -259,8 +269,9 @@ export class PauseScreen {
   onResume: (() => void) | null = null;
   onRestart: (() => void) | null = null;
   onQuit: (() => void) | null = null;
+  onControls: (() => void) | null = null;
 
-  constructor(root: HTMLElement) {
+  constructor(root: HTMLElement, withControls: boolean) {
     this.el = h('div', 'screen pause hidden');
     this.el.innerHTML = `
       <div class="results-card">
@@ -268,6 +279,7 @@ export class PauseScreen {
         <div class="col">
           <button class="btn primary" data-a="resume">Continuar</button>
           <button class="btn" data-a="restart">Recomeçar</button>
+          ${withControls ? '<button class="btn" data-a="controls">Controlos</button>' : ''}
           <button class="btn" data-a="quit">Sair para o menu</button>
         </div>
       </div>`;
@@ -279,10 +291,154 @@ export class PauseScreen {
       if (b.dataset.a === 'resume') this.onResume?.();
       if (b.dataset.a === 'restart') this.onRestart?.();
       if (b.dataset.a === 'quit') this.onQuit?.();
+      if (b.dataset.a === 'controls') this.onControls?.();
     });
   }
 
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
+  }
+}
+
+// ---------------------------------------------------------------- controls (mobile)
+
+export interface ControlSettings {
+  controls: ControlMode;
+  tiltSens: TiltSens;
+  tiltCenter: number;
+}
+
+const WHEEL_SVG = `<svg viewBox="0 0 100 100" class="cp-wheel"><circle cx="50" cy="50" r="40"/><circle cx="50" cy="50" r="9"/><path d="M14 46 Q50 36 86 46 M50 59 V89 M41 52 L19 70 M59 52 L81 70"/><path class="cp-wheel-top" d="M44 11 h12"/></svg>`;
+
+/**
+ * Pick touch buttons or tilt steering. Tilt shows a live steering wheel that
+ * follows the phone, a sensitivity picker and a one-tap calibration.
+ */
+export class ControlsPanel {
+  readonly el: HTMLElement;
+  private raf = 0;
+  private last = 0;
+  private wheel: HTMLElement;
+  private bar: HTMLElement;
+  private status: HTMLElement;
+  onChange: ((s: ControlSettings) => void) | null = null;
+  onClose: (() => void) | null = null;
+
+  constructor(
+    root: HTMLElement,
+    private input: Input,
+    private settings: ControlSettings,
+  ) {
+    this.el = h('div', 'controls-panel hidden');
+    this.el.innerHTML = `
+      <div class="results-card cp-card">
+        <h2>Controlos</h2>
+        <div class="cp-modes">
+          <button class="cp-mode" data-mode="buttons">
+            <span class="cp-ico cp-ico-btn"><i></i><i></i></span>
+            <b>Botões</b><small>Vira com ← → no ecrã</small>
+          </button>
+          <button class="cp-mode" data-mode="tilt">
+            <span class="cp-ico cp-ico-tilt"><i></i></span>
+            <b>Inclinação</b><small>Roda o telemóvel como um volante</small>
+          </button>
+        </div>
+        <div class="cp-tilt">
+          <div class="cp-live">
+            ${WHEEL_SVG}
+            <div class="cp-meter"><i></i><em></em></div>
+          </div>
+          <div class="cp-side">
+            <span class="cp-label">Sensibilidade</span>
+            <div class="cp-seg">${TILT_SENS_LABELS.map((l, i) => `<button data-sens="${i}">${l}</button>`).join('')}</div>
+            <button class="btn small" data-a="calib">Calibrar centro</button>
+            <p class="cp-status"></p>
+          </div>
+        </div>
+        <button class="btn primary" data-a="close">Fechar</button>
+      </div>`;
+    root.appendChild(this.el);
+    this.wheel = this.el.querySelector<HTMLElement>('.cp-wheel')!;
+    this.bar = this.el.querySelector('.cp-meter i')!;
+    this.status = this.el.querySelector('.cp-status')!;
+    this.el.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest('button');
+      if (!b) return;
+      audio.click();
+      if (b.dataset.mode) void this.setMode(b.dataset.mode as ControlMode);
+      if (b.dataset.sens) {
+        this.settings.tiltSens = Number(b.dataset.sens) as TiltSens;
+        this.input.tilt.sens = this.settings.tiltSens;
+        this.emit();
+      }
+      if (b.dataset.a === 'calib') {
+        this.input.tilt.calibrate();
+        this.settings.tiltCenter = this.input.tilt.center;
+        this.emit();
+        this.wheel.classList.remove('pulse');
+        void this.wheel.getBoundingClientRect();
+        this.wheel.classList.add('pulse');
+      }
+      if (b.dataset.a === 'close') {
+        this.show(false);
+        this.onClose?.();
+      }
+    });
+  }
+
+  private async setMode(m: ControlMode) {
+    if (m === 'tilt') {
+      // iOS asks for permission here, inside the tap
+      this.status.textContent = '';
+      const ok = await this.input.tilt.request();
+      if (!ok) {
+        this.status.textContent = 'Sem acesso ao giroscópio. Autoriza "Movimento e orientação" nas definições do browser.';
+        this.status.classList.add('bad');
+        m = 'buttons';
+      }
+    }
+    this.settings.controls = m;
+    this.input.setMode(m);
+    this.emit();
+  }
+
+  private emit() {
+    this.render();
+    this.onChange?.(this.settings);
+  }
+
+  private render() {
+    const tilt = this.settings.controls === 'tilt';
+    this.el.querySelectorAll<HTMLElement>('.cp-mode').forEach((b) => b.classList.toggle('on', b.dataset.mode === this.settings.controls));
+    this.el.querySelectorAll<HTMLElement>('[data-sens]').forEach((b) => b.classList.toggle('on', Number(b.dataset.sens) === this.settings.tiltSens));
+    this.el.querySelector('.cp-tilt')!.classList.toggle('show', tilt);
+  }
+
+  show(v: boolean) {
+    this.el.classList.toggle('hidden', !v);
+    cancelAnimationFrame(this.raf);
+    if (!v) return;
+    this.status.textContent = '';
+    this.status.classList.remove('bad');
+    this.render();
+    this.last = performance.now();
+    const loop = (now: number) => {
+      const dt = Math.min(0.1, (now - this.last) / 1000);
+      this.last = now;
+      if (this.settings.controls === 'tilt') {
+        const t = this.input.tilt;
+        const steer = t.read(dt);
+        const lock = TILT_LOCK_DEG[t.sens];
+        // the drawn wheel turns like a real one: a few times the phone's angle
+        const ang = Math.max(-lock * 1.4, Math.min(lock * 1.4, t.angleDeg)) * 4;
+        this.wheel.style.transform = `rotate(${ang}deg)`;
+        this.bar.style.transform = `scaleX(${steer})`;
+        this.wheel.classList.toggle('full', Math.abs(steer) > 0.98);
+        if (!t.live && !this.status.classList.contains('bad')) this.status.textContent = 'À espera do sensor… segura o telemóvel na horizontal.';
+        else if (t.live && !this.status.classList.contains('bad')) this.status.textContent = 'Segura na horizontal como um volante. Toca na barra durante a corrida para recentrar.';
+      }
+      this.raf = requestAnimationFrame(loop);
+    };
+    this.raf = requestAnimationFrame(loop);
   }
 }
