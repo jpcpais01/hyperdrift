@@ -2,7 +2,7 @@ import './style.css';
 import { registerSW } from 'virtual:pwa-register';
 import type { CarBuild } from './car/parts';
 import { audio } from './core/audio';
-import { installFirstTouch, isPortrait, isTouch } from './core/fullscreen';
+import { canLockLandscape, installFirstTouch, isIOS, isPhone, isPortrait, isStandalone, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
 import { tiltSupported } from './core/tilt';
 import { Renderer } from './core/renderer';
@@ -103,7 +103,18 @@ class App {
     }
     this.rotate = document.createElement('div');
     this.rotate.className = 'rotate-hint hidden';
-    this.rotate.innerHTML = '<div><div class="phone"></div><p>Roda o telemóvel para jogar na horizontal</p></div>';
+    // iPhone Safari can't go fullscreen from a web page: point to the home-screen app instead
+    const iosTip =
+      isIOS() && !isStandalone()
+        ? '<p class="rh-tip">Para ecrã inteiro: toca em <b>Partilhar</b> e depois <b>Adicionar ao ecrã principal</b>.</p>'
+        : canLockLandscape()
+          ? '<p class="rh-tap">Toca no ecrã para rodar e jogar em ecrã inteiro</p>'
+          : '';
+    this.rotate.innerHTML =
+      '<div class="rh-card"><div class="rh-phone"><div class="rh-screen"><span></span></div></div>' +
+      '<h3>RODA O TELEMÓVEL</h3><p>O Hyperdrift joga-se na horizontal.</p>' +
+      iosTip +
+      '</div>';
     ui.appendChild(this.rotate);
 
     audio.setMuted(this.settings.muted);
@@ -236,7 +247,8 @@ class App {
     this.last = now;
     this.time += dt;
 
-    const needRotate = isTouch() && isPortrait() && (this.state === 'race' || this.state === 'results');
+    // phones always play sideways; tablets only need it for the race itself
+    const needRotate = isTouch() && isPortrait() && (isPhone() || this.state === 'race' || this.state === 'results');
     this.rotate.classList.toggle('hidden', !needRotate);
 
     if (this.state === 'garage') {

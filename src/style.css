@@ -874,23 +874,118 @@ button {
 .rotate-hint {
   position: absolute;
   inset: 0;
-  z-index: 10;
+  z-index: 50;
   display: grid;
   place-items: center;
+  padding: calc(24px + var(--safe-t)) 28px calc(24px + var(--safe-b));
   text-align: center;
-  background: rgba(5, 8, 20, 0.92);
+  background:
+    radial-gradient(120% 70% at 50% 40%, rgba(41, 224, 255, 0.16), transparent 60%),
+    radial-gradient(90% 60% at 50% 100%, rgba(255, 63, 180, 0.14), transparent 70%),
+    rgba(5, 8, 20, 0.94);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  animation: rh-in 0.35s ease-out;
 }
-.rotate-hint .phone {
-  width: 46px;
-  height: 80px;
-  margin: 0 auto 16px;
+.rh-card {
+  max-width: 300px;
+}
+.rh-card h3 {
+  margin: 28px 0 6px;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.rh-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.4;
+}
+.rh-card .rh-tip {
+  margin-top: 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 13px;
+}
+.rh-card .rh-tap {
+  margin-top: 22px;
+  color: var(--accent);
+  font-weight: 700;
+  animation: rh-pulse 1.6s ease-in-out infinite;
+}
+@keyframes rh-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.rh-card .rh-tip b {
+  color: var(--text);
+}
+.rh-phone {
+  position: relative;
+  width: 52px;
+  height: 92px;
+  margin: 0 auto;
   border: 3px solid var(--text);
-  border-radius: 10px;
-  animation: rot 1.8s ease-in-out infinite;
+  border-radius: 12px;
+  box-shadow: 0 0 24px rgba(41, 224, 255, 0.35);
+  animation: rh-rot 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
-@keyframes rot {
+.rh-screen {
+  position: absolute;
+  inset: 6px 4px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #1a2a5c, #0b1020);
+}
+/* a tiny road streaking past, to hint at what's waiting sideways */
+.rh-screen span {
+  position: absolute;
+  left: 50%;
+  top: -40%;
+  width: 3px;
+  height: 40%;
+  margin-left: -1.5px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, transparent, var(--accent));
+  animation: rh-road 0.8s linear infinite;
+}
+@keyframes rh-rot {
+  0%,
+  20% {
+    transform: rotate(0deg);
+  }
   50%,
+  85% {
+    transform: rotate(-90deg);
+  }
   100% {
+    transform: rotate(0deg);
+  }
+}
+@keyframes rh-road {
+  to {
+    top: 110%;
+  }
+}
+@keyframes rh-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rh-phone,
+  .rh-screen span {
+    animation: none;
+  }
+  .rh-phone {
     transform: rotate(-90deg);
   }
 }
