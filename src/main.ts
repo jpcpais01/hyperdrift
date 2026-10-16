@@ -14,8 +14,11 @@ import { Hud } from './ui/hud';
 import { ControlsPanel, GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
+import { FreeRoam, ZoneWorld } from './zone/freeRoam';
 
-type State = 'menu' | 'garage' | 'race' | 'results';
+type State = 'menu' | 'garage' | 'race' | 'results' | 'zone';
+/** what the garage's "Correr" button and "again" start */
+type PlayMode = RaceMode | 'zone';
 
 class App {
   private renderer: Renderer;
@@ -32,7 +35,10 @@ class App {
   private rotate: HTMLElement;
   private state: State = 'menu';
   private race: Race | null = null;
-  private raceMode: RaceMode = 'race';
+  private raceMode: PlayMode = 'race';
+  /** the drift zone: built on the first visit, then kept */
+  private zoneWorld: ZoneWorld | null = null;
+  private zone: FreeRoam | null = null;
   private build: CarBuild;
   private settings = storage.loadSettings();
   private last = performance.now();
@@ -74,7 +80,7 @@ class App {
         this.menu.setControlsLabel(controlsLabel());
       };
       panel.onClose = () => {
-        if (this.state === 'race' && this.race?.paused) this.pause.show(true);
+        if (this.session?.paused) this.pause.show(true);
       };
       this.menu.onControls = () => panel.show(true);
       this.pause.onControls = () => {
@@ -124,6 +130,7 @@ class App {
     this.menu.onRace = () => this.startRace('race');
     this.menu.onTimeTrial = () => this.startRace('timetrial');
     this.menu.onGarage = () => this.go('garage');
+    this.menu.onZone = () => this.startZone();
     this.menu.onToggleSound = () => {
       this.settings.muted = !this.settings.muted;
       audio.setMuted(this.settings.muted);
@@ -137,30 +144,37 @@ class App {
       this.garageScene.preview(b, slot);
     };
     this.garage.onBack = () => this.go('menu');
-    this.garage.onRace = () => this.startRace(this.raceMode === 'attract' ? 'race' : this.raceMode);
-    this.results.onAgain = () => this.startRace(this.raceMode);
+    this.garage.onRace = () => this.play(this.raceMode === 'attract' ? 'race' : this.raceMode);
+    this.results.onAgain = () => this.play(this.raceMode);
     this.results.onGarage = () => this.go('garage');
     this.results.onMenu = () => this.go('menu');
     const togglePause = () => {
-      if (this.state !== 'race' || !this.race) return;
-      this.setPaused(!this.race.paused);
+      const s = this.session;
+      if (s) this.setPaused(!s.paused);
     };
     this.input.onPause = togglePause;
     const cycleCamera = () => {
-      if (this.state !== 'race' || !this.race || this.race.paused) return;
+      const s = this.session;
+      if (!s || s.paused) return;
       this.settings.camZoom = ((this.settings.camZoom + 1) % 3) as CameraZoom;
       storage.saveSettings(this.settings);
-      this.race.setCameraZoom(this.settings.camZoom);
+      s.setCameraZoom(this.settings.camZoom);
       this.hud.setCameraZoom(this.settings.camZoom, `CÂMARA · ${CAMERA_ZOOM_LABELS[this.settings.camZoom]}`);
     };
     this.input.onCamera = cycleCamera;
     this.hud.onCamera = cycleCamera;
     this.hud.onPause = togglePause;
     this.pause.onResume = () => this.setPaused(false);
-    this.pause.onRestart = () => this.startRace(this.raceMode);
+    this.pause.onRestart = () => {
+      if (this.state === 'zone' && this.zone) {
+        // in free roam, "restart" just drops you back at the start
+        this.zone.restart();
+        this.setPaused(false);
+      } else this.play(this.raceMode);
+    };
     this.pause.onQuit = () => this.go('menu');
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden && this.state === 'race' && this.race && !this.race.paused) this.setPaused(true);
+      if (document.hidden && this.session && !this.session.paused) this.setPaused(true);
     });
 
     this.go('menu');
@@ -168,9 +182,22 @@ class App {
     requestAnimationFrame(this.frame);
   }
 
+  /** The race or free roam the player is driving in right now (not the menu's attract race). */
+  private get session(): Race | FreeRoam | null {
+    if (this.state === 'race' && this.race) return this.race;
+    if (this.state === 'zone' && this.zone) return this.zone;
+    return null;
+  }
+
+  private play(mode: PlayMode) {
+    if (mode === 'zone') this.startZone();
+    else this.startRace(mode);
+  }
+
   private setPaused(p: boolean) {
-    if (!this.race) return;
-    this.race.paused = p;
+    const s = this.session;
+    if (!s) return;
+    s.paused = p;
     this.pause.show(p);
     if (!p) this.controls?.show(false);
     this.input.clear();
@@ -184,6 +211,10 @@ class App {
     if (this.race) {
       this.race.dispose();
       this.race = null;
+    }
+    if (this.zone) {
+      this.zone.dispose();
+      this.zone = null;
     }
     if (audio.ctx && audio.ctx.state === 'suspended') void audio.ctx.resume();
   }
@@ -250,18 +281,43 @@ class App {
     this.race = race;
   }
 
+  private startZone() {
+    this.endRace();
+    this.garageScene.stopPreview();
+    this.raceMode = 'zone';
+    this.state = 'zone';
+    this.menu.show(false);
+    this.garage.show(false);
+    this.garageScene.setActive(false);
+    this.results.show(null);
+    this.pause.show(false);
+    this.controls?.show(false);
+    this.input.clear();
+    this.input.setTouchVisible(isTouch());
+    if (!this.zoneWorld) this.zoneWorld = new ZoneWorld(this.sky);
+    this.zoneWorld.attach();
+    this.renderer.setScene(this.zoneWorld.scene);
+    const zone = new FreeRoam(this.zoneWorld, this.build, this.input, this.hud, storage.loadBestDrift());
+    zone.setCameraZoom(this.settings.camZoom, true);
+    this.hud.setCameraZoom(this.settings.camZoom);
+    zone.onBest = (best) => storage.saveBestDrift(best);
+    this.zone = zone;
+  }
+
   private frame = (now: number) => {
     const dt = Math.min(0.1, (now - this.last) / 1000);
     this.last = now;
     this.time += dt;
 
     // phones always play sideways; tablets only need it for the race itself
-    const needRotate = isTouch() && isPortrait() && (isPhone() || this.state === 'race' || this.state === 'results');
+    const needRotate = isTouch() && isPortrait() && (isPhone() || this.state === 'race' || this.state === 'results' || this.state === 'zone');
     this.rotate.classList.toggle('hidden', !needRotate);
 
     if (this.state === 'garage') {
       const panel = window.innerWidth > 900 ? 1.7 : 2.0;
       this.garageScene.update(dt, this.time, this.renderer.camera, this.sky, isPortrait() ? 0 : panel);
+    } else if (this.zone) {
+      this.zone.update(needRotate ? 0 : dt, this.renderer);
     } else if (this.race) {
       this.race.update(needRotate ? 0 : dt, this.renderer);
     }

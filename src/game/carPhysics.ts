@@ -1,5 +1,5 @@
 import { Quaternion, Vector3, Matrix4 } from 'three';
-import { HALF_WIDTH, makeQuery, type Track } from '../track/track';
+import { HALF_WIDTH, makeQuery, type Track, type TrackQuery } from '../track/track';
 import type { CarStats } from '../car/stats';
 import { Drivetrain } from './drivetrain';
 
@@ -30,6 +30,21 @@ export interface Hitbox {
 }
 
 export const DEFAULT_HITBOX: Hitbox = { front: 2.25, back: 2.2, halfWidth: 0.98, height: 1.3 };
+
+/**
+ * Open ground instead of a track (the free-roam zone): a height field the car drives on
+ * freely, plus solid obstacles. Crests launch the car when it is fast enough to fly.
+ */
+export interface FreeGround {
+  query(p: Vector3, fwdHint: Vector3, out: TrackQuery): TrackQuery;
+  heightAt(x: number, z: number): number;
+  /** pushes `pos` out of walls and obstacles; returns the push distance, `normal` the direction */
+  collide(pos: Vector3, radius: number, normal: Vector3): number;
+  spawn(i: number, pos: Vector3, fwd: Vector3): void;
+}
+
+/** Radius of the circle a car is treated as against free-roam obstacles. */
+const FREE_RADIUS = 1.25;
 
 export type CarEvent =
   | { type: 'land'; strength: number }
@@ -101,16 +116,46 @@ export class CarPhysics {
   private heaveVel = 0;
 
   slip = 0;
+  /** speed into the last obstacle hit (free roam), cleared by the caller */
+  impact = 0;
+  /** free-roam spawn slot used when the car respawns */
+  spawnSlot = 0;
   events: CarEvent[] = [];
   private q = makeQuery();
   private lastQ = makeQuery();
 
+  /** set for free roam: the car drives on open ground instead of the track */
+  ground: FreeGround | null = null;
+
   constructor(
-    public track: Track,
+    public track: Track | null,
     public stats: CarStats,
     seed = 1,
   ) {
     this.drivetrain = new Drivetrain(stats, seed);
+  }
+
+  /** Free roam: drop the car at `pos` facing `heading`, at rest. */
+  place(pos: Vector3, heading: Vector3) {
+    this.pos.copy(pos);
+    const g = this.ground;
+    if (g) this.up.copy(g.query(pos, heading, this.q).up);
+    else this.up.set(0, 1, 0);
+    this.fwd.copy(heading).addScaledVector(this.up, -heading.dot(this.up)).normalize();
+    this.right.crossVectors(this.fwd, this.up).normalize();
+    this.vel.set(0, 0, 0);
+    this.yawRate = 0;
+    this.spin = 0;
+    this.grounded = true;
+    this.airTime = 0;
+    this.drifting = false;
+    this.driftTime = 0;
+    this.boostTime = 0;
+    this.boostFx = 0;
+    this.nitroActive = false;
+    this.nitroFx = 0;
+    this.pitch = this.roll = this.heave = 0;
+    this.updateQuat();
   }
 
   /** revs as a fraction of the redline */
@@ -130,7 +175,7 @@ export class CarPhysics {
 
   /** Place the car at distance s along the track, lateral offset `lat`. */
   reset(s: number, lat: number) {
-    const fr = this.track.frameAt(s);
+    const fr = this.track!.frameAt(s);
     this.pos.copy(fr.pos).addScaledVector(fr.right, lat);
     this.fwd.copy(fr.fwd);
     this.up.copy(fr.up);
@@ -166,15 +211,35 @@ export class CarPhysics {
 
   step(dt: number, input: DriveInput) {
     const st = this.stats;
-    const q = this.track.query(this.pos, this.trackIndex, this.q);
-    this.trackIndex = q.index;
-    this.trackS = q.s;
-    this.lateral = q.lateral;
-    const overDeck = !q.gap && Math.abs(q.lateral) < HALF_WIDTH + 0.4;
-    const snap = this.grounded ? 1.6 : 0.4;
-    const towards = this.vel.dot(q.up);
+    const ground = this.ground;
     const wasGrounded = this.grounded;
-    this.grounded = overDeck && q.height < snap && q.height > -3.5 && (wasGrounded || towards < 3);
+    let q: TrackQuery;
+    let overDeck: boolean;
+    if (ground) {
+      q = ground.query(this.pos, this.fwd, this.q);
+      overDeck = !q.gap;
+      if (wasGrounded) {
+        // launch off crests: where the ground falls away faster than gravity can pull the car down
+        // (from the ground point under the car, moving along the ground's tangent plane)
+        const vt = TMP2.copy(this.vel).addScaledVector(q.up, -this.vel.dot(q.up));
+        const px = this.pos.x + vt.x * dt;
+        const pz = this.pos.z + vt.z * dt;
+        const clear = q.pos.y + vt.y * dt - ground.heightAt(px, pz);
+        const launch = clear > 0.5 * GRAVITY * dt * dt + 1e-4 && this.speed > 8;
+        this.grounded = overDeck && !launch && q.height < 1.2 && q.height > -1.5;
+      } else {
+        this.grounded = overDeck && q.height < 0.02;
+      }
+    } else {
+      q = this.track!.query(this.pos, this.trackIndex, this.q);
+      this.trackIndex = q.index;
+      this.trackS = q.s;
+      this.lateral = q.lateral;
+      overDeck = !q.gap && Math.abs(q.lateral) < HALF_WIDTH + 0.4;
+      const snap = this.grounded ? 1.6 : 0.4;
+      const towards = this.vel.dot(q.up);
+      this.grounded = overDeck && q.height < snap && q.height > -3.5 && (wasGrounded || towards < 3);
+    }
 
     if (this.boostTime > 0) this.boostTime -= dt;
 
@@ -286,7 +351,7 @@ export class CarPhysics {
 
       // --- rails
       const limit = HALF_WIDTH - CAR_HALF_WIDTH;
-      if (Math.abs(q.lateral) > limit) {
+      if (!ground && Math.abs(q.lateral) > limit) {
         const side = Math.sign(q.lateral);
         this.pos.addScaledVector(q.right, -side * (Math.abs(q.lateral) - limit));
         const vn = this.vel.dot(q.right) * side;
@@ -327,7 +392,7 @@ export class CarPhysics {
       if (this.drifting && this.airTime > 0.6) this.endDrift(false);
       this.forwardSpeed = this.vel.dot(this.fwd);
       this.spring(dt, 0, 0, 0);
-      const fell = (!overDeck || q.height < -3.5) && (q.height < -45 || Math.abs(q.lateral) > HALF_WIDTH + 70);
+      const fell = ground ? q.height < -60 : (!overDeck || q.height < -3.5) && (q.height < -45 || Math.abs(q.lateral) > HALF_WIDTH + 70);
       if (fell) this.respawn();
     }
     this.lastForward = this.forwardSpeed;
@@ -341,6 +406,7 @@ export class CarPhysics {
     }
 
     this.pos.addScaledVector(this.vel, dt);
+    if (ground) this.hitObstacles(ground);
     this.updateQuat();
 
     // drivetrain for sound and exhaust effects
@@ -359,6 +425,31 @@ export class CarPhysics {
   }
 
   private lastForward = 0;
+
+  /** Free roam: bounce off the force field, trees, lanterns and the like. */
+  private hitObstacles(ground: FreeGround) {
+    const n = TMP3;
+    const push = ground.collide(this.pos, FREE_RADIUS, n);
+    if (push <= 0) return;
+    const vn = -this.vel.dot(n);
+    if (vn <= 0) return;
+    this.vel.addScaledVector(n, vn * 1.3);
+    this.vel.multiplyScalar(1 - Math.min(0.3, vn * 0.012));
+    // glancing hits steer the nose along the obstacle
+    if (this.grounded && this.fwd.dot(n) < 0) {
+      const along = TMP.copy(this.fwd).addScaledVector(n, -this.fwd.dot(n));
+      if (along.lengthSq() > 0.05) {
+        this.fwd.lerp(along.normalize(), Math.min(0.8, vn * 0.02)).normalize();
+        this.right.crossVectors(this.fwd, this.up).normalize();
+      }
+    }
+    this.impact = Math.max(this.impact, vn);
+    if (vn > 3) {
+      this.events.push({ type: 'wall', strength: Math.min(1, vn / 25) });
+      this.jolt(n.dot(this.right) * -1, n.dot(this.fwd) * -1, Math.min(1, vn / 20));
+    }
+    if (this.drifting && vn > 8) this.endDrift(false);
+  }
 
   private spring(dt: number, pitchT: number, rollT: number, heaveT: number) {
     const k = 120;
@@ -404,10 +495,16 @@ export class CarPhysics {
   }
 
   respawn() {
-    const n = this.track.samples.length;
+    if (this.ground) {
+      this.ground.spawn(this.spawnSlot, TMP, TMP2);
+      this.place(TMP, TMP2.clone());
+      this.events.push({ type: 'respawn' });
+      return;
+    }
+    const n = this.track!.samples.length;
     let i = (this.lastGroundIndex - 25 + n) % n;
-    while (this.track.samples[i].gap) i = (i - 1 + n) % n;
-    const fr = this.track.frameAt(i);
+    while (this.track!.samples[i].gap) i = (i - 1 + n) % n;
+    const fr = this.track!.frameAt(i);
     this.pos.copy(fr.pos).addScaledVector(fr.up, 0.3);
     this.fwd.copy(fr.fwd);
     this.up.copy(fr.up);
@@ -441,6 +538,7 @@ export class CarPhysics {
 
 const TMP = new Vector3();
 const TMP2 = new Vector3();
+const TMP3 = new Vector3();
 const MAT = new Matrix4();
 const QR = new Quaternion();
 

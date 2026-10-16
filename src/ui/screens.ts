@@ -43,6 +43,7 @@ export class MenuScreen {
   onRace: (() => void) | null = null;
   onTimeTrial: (() => void) | null = null;
   onGarage: (() => void) | null = null;
+  onZone: (() => void) | null = null;
   onToggleSound: (() => boolean) | null = null;
   onControls: (() => void) | null = null;
 
@@ -55,6 +56,7 @@ export class MenuScreen {
         <nav class="menu-buttons">
           <button class="btn primary" data-a="race">Corrida <small>contra 3 rivais</small></button>
           <button class="btn" data-a="tt">Contrarrelógio <small>contra o teu fantasma</small></button>
+          <button class="btn btn-zone" data-a="zone">Zona livre <small>drift à vontade no Jardim Celeste</small></button>
           <button class="btn" data-a="garage">Garagem <small>monta o teu carro</small></button>
         </nav>
       </div>
@@ -89,6 +91,7 @@ export class MenuScreen {
       if (a === 'race') this.onRace?.();
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
+      if (a === 'zone') this.onZone?.();
       if (a === 'controls') this.onControls?.();
       if (a === 'update') void checkAndReload();
       if (a === 'notes' || a === 'notes-close') this.el.querySelector('.notes')!.classList.toggle('hidden', a === 'notes-close');

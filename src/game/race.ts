@@ -15,6 +15,7 @@ import { TrackView } from '../world/trackView';
 import type { Hud } from '../ui/hud';
 import { AiDriver } from './ai';
 import { collideCars, type CarContact } from './carCollision';
+import { emitContactFx, emitDriveFx, emitNitroFx, emitPopFx, emitWallFx, poseCar } from './carFx';
 import { CarPhysics, NITRO_PICKUP, type DriveInput } from './carPhysics';
 import { ChaseCamera, type CameraZoom } from './chaseCamera';
 import { GhostPlayer, GhostRecorder, type GhostLap } from './ghost';
@@ -29,7 +30,7 @@ export class RaceWorld {
 
   constructor(readonly sky: Sky) {
     this.view = new TrackView(this.track);
-    this.decor = new Decor(this.track);
+    this.decor = new Decor(this.track.samples.filter((_, i) => i % 10 === 0).map((s) => s.pos));
     this.scene.add(this.view.group, this.decor.group, this.particles.points);
   }
 
@@ -451,36 +452,8 @@ export class Race {
       }
     }
 
-    // effects: drift smoke and boost embers
-    const parts = this.world.particles;
-    if (p.grounded && (p.drifting || p.slip > 6) && p.speed > 10) {
-      for (const side of [-1, 1]) {
-        const wp = TMP.copy(p.pos).addScaledVector(p.fwd, -1.3).addScaledVector(p.right, side * 0.85).addScaledVector(p.up, 0.25);
-        const v = TMP2.copy(p.up).multiplyScalar(1.5).addScaledVector(p.vel, 0.25);
-        parts.emit(wp, v, SMOKE, 0.12, 0.7, 0.9, 2.5, 1.5);
-      }
-      if (p.drifting && p.driftTime > 0.7) {
-        const charge = Math.min(1, p.driftTime / 3);
-        const col = charge > 0.6 ? SPARK_HOT : SPARK;
-        const wp = TMP.copy(p.pos).addScaledVector(p.fwd, -1.3).addScaledVector(p.right, -p.driftDir * 0.85).addScaledVector(p.up, 0.1);
-        parts.emit(wp, TMP2.set((Math.random() - 0.5) * 4, 2 + Math.random() * 3, (Math.random() - 0.5) * 4).addScaledVector(p.vel, 0.6), col, 1, 0.12, 0.35, 0, 1);
-      }
-    }
-    if (p.boostFx > 0.3 && c.visual.exhaustTips.length) {
-      const nitro = p.nitroFx > 0.3;
-      const tips = c.visual.exhaustTips.length;
-      // nitro sheds bright blue sparks; a plain boost a few embers
-      const n = nitro ? 2 : 1;
-      for (let k = 0; k < n; k++) {
-        const wp = c.visual.tipWorld(Math.floor(Math.random() * tips), TMP);
-        const v = TMP2.copy(p.vel)
-          .multiplyScalar(0.75)
-          .addScaledVector(p.fwd, -(nitro ? 10 : 6) - Math.random() * 6)
-          .addScaledVector(p.up, (Math.random() - 0.3) * 2)
-          .addScaledVector(p.right, (Math.random() - 0.5) * 2.5);
-        parts.emit(wp, v, nitro ? (Math.random() < 0.3 ? NITRO_WHITE : NITRO_SPARK) : EMBER, (nitro ? 0.9 : 0.5) * p.boostFx, nitro ? 0.1 : 0.14, nitro ? 0.28 : 0.2, -0.2, 2.5);
-      }
-    }
+    // effects: drift smoke and sparks, boost embers
+    emitDriveFx(this.world.particles, p, c.visual);
   }
 
   private handleEvents(c: RaceCar) {
@@ -490,23 +463,13 @@ export class Race {
       if (e.type === 'pop') {
         c.visual.exhaust?.pop(e.strength);
         if (c.voice) audio.pop(c.voice, e.strength);
-        if (e.strength > 0.6 && c.visual.exhaustTips.length) {
-          const wp = c.visual.tipWorld(Math.floor(Math.random() * c.visual.exhaustTips.length), TMP);
-          for (let k = 0; k < 3; k++) {
-            this.world.particles.emit(wp, TMP2.copy(p.vel).addScaledVector(p.fwd, -4 - Math.random() * 4).addScaledVector(p.up, Math.random() * 2), SPARK, 0.9, 0.08, 0.25, 0, 2);
-          }
-        }
+        emitPopFx(this.world.particles, p, c.visual, e.strength);
         continue;
       }
       if (e.type === 'nitro') {
         c.visual.exhaust?.ignite();
         if (c.voice) audio.nitroStart(c.voice);
-        const tips = c.visual.exhaustTips.length;
-        for (let k = 0; k < 12 && tips; k++) {
-          const wp = c.visual.tipWorld(k, TMP);
-          const v = TMP2.set((Math.random() - 0.5) * 5, (Math.random() - 0.2) * 4, (Math.random() - 0.5) * 5).addScaledVector(p.vel, 0.8).addScaledVector(p.fwd, -8);
-          this.world.particles.emit(wp, v, k % 3 ? NITRO_SPARK : NITRO_WHITE, 1, 0.16, 0.35, 0.4, 2);
-        }
+        emitNitroFx(this.world.particles, p, c.visual);
         if (c.isPlayer) {
           this.chase.addShake(0.55);
           this.hud?.message('NITRO!', 0.7, 'nitro');
@@ -522,11 +485,7 @@ export class Race {
         case 'wall':
           audio.wall(e.strength);
           this.chase.addShake(e.strength * 0.5);
-          for (let k = 0; k < 8; k++) {
-            const side = Math.sign(p.lateral);
-            const wp = TMP.copy(p.pos).addScaledVector(p.right, side * 1).addScaledVector(p.up, 0.4);
-            this.world.particles.emit(wp, TMP2.set((Math.random() - 0.5) * 6, Math.random() * 6, (Math.random() - 0.5) * 6).addScaledVector(p.vel, 0.8), SPARK_HOT, 1, 0.12, 0.4, 0, 1);
-          }
+          emitWallFx(this.world.particles, p, TMP.copy(p.right).multiplyScalar(Math.sign(p.lateral)));
           break;
         case 'boost':
           audio.boost();
@@ -549,19 +508,10 @@ export class Race {
   private collide() {
     const contacts = collideCars(this.physicsList, this.contacts);
     const pl = this.player?.physics;
-    const parts = this.world.particles;
     for (const ct of contacts) {
       const hard = Math.min(1, ct.impulse / 14);
       // sparks fly out of the contact, carried along by the cars
-      const n = Math.min(14, Math.round(ct.impulse * 0.9 + ct.scrape * 0.15));
-      const carry = TMP3.copy(ct.a.vel).add(ct.b.vel).multiplyScalar(0.5);
-      for (let k = 0; k < n; k++) {
-        const out = Math.random() < 0.5 ? 1 : -1;
-        const v = TMP2.set((Math.random() - 0.5) * 7, 1.5 + Math.random() * 5, (Math.random() - 0.5) * 7)
-          .addScaledVector(ct.normal, out * (2 + ct.impulse * 0.4))
-          .add(carry);
-        parts.emit(TMP.copy(ct.point).addScaledVector(ct.a.up, 0.45 + Math.random() * 0.3), v, k % 3 ? SPARK : SPARK_HOT, 1, 0.1 + 0.06 * hard, 0.25 + 0.3 * Math.random(), 0, 1.4);
-      }
+      emitContactFx(this.world.particles, ct);
       if (ct.a !== pl && ct.b !== pl) continue;
       if (ct.impulse > 1.2 && this.bumpCooldown <= 0) {
         audio.bump(0.25 + hard * 0.75);
@@ -598,22 +548,7 @@ export class Race {
   }
 
   private updateVisuals(dt: number) {
-    for (const c of this.cars) {
-      const p = c.physics;
-      const v = c.visual;
-      v.root.position.copy(p.pos);
-      v.root.quaternion.copy(p.quat);
-      v.body.rotation.set(p.pitch, 0, p.roll);
-      v.body.position.y = p.heave * 0.5;
-      const counter = p.drifting ? p.driftDir * 0.35 : 0;
-      v.updateWheels({
-        steer: p.steerVisual + counter,
-        spin: p.wheelSpin,
-        travel: [p.heave * 0.4 - p.roll * 0.6, p.heave * 0.4 + p.roll * 0.6, p.heave * 0.4 - p.roll * 0.6, p.heave * 0.4 + p.roll * 0.6].map((x) => Math.max(-0.08, Math.min(0.08, x))),
-      });
-      v.materials.setBrake(c.lastInput.brake > 0 && p.forwardSpeed > 1 ? 1 : 0);
-      v.exhaust?.update(dt, this.fxTime + c.place * 3.1, Math.max(0, p.boostFx - p.nitroFx), p.nitroFx);
-    }
+    for (const c of this.cars) poseCar(c.physics, c.visual, c.lastInput.brake, dt, this.fxTime + c.place * 3.1);
   }
 
   setCameraZoom(level: CameraZoom, instant = false) {
@@ -723,10 +658,4 @@ export class Race {
 const TMP = new Vector3();
 const TMP2 = new Vector3();
 const TMP3 = new Vector3();
-const SMOKE = new Color(0.9, 0.9, 0.95);
-const SPARK = new Color(1.6, 0.9, 0.3);
-const SPARK_HOT = new Color(0.6, 1.6, 3.0);
-const EMBER = new Color(0.9, 0.45, 0.15);
-const NITRO_SPARK = new Color(0.35, 0.9, 2.6);
-const NITRO_WHITE = new Color(2.2, 2.4, 2.8);
 const PICK_COLOR = new Color(0.4, 2.2, 3.0);
