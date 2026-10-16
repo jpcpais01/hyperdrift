@@ -4,18 +4,12 @@
  * the technical ones change the driving stats (see stats.ts).
  */
 
-export type VisualSlot =
-  | 'body'
-  | 'front'
-  | 'rear'
-  | 'hood'
-  | 'skirts'
-  | 'spoiler'
-  | 'rims'
-  | 'headlights'
-  | 'exhaust'
-  | 'paint'
-  | 'vinyl';
+export type GeoSlot = 'body' | 'front' | 'rear' | 'hood' | 'skirts' | 'spoiler' | 'rims' | 'headlights' | 'exhaust';
+
+/** Per-part paint: each one is 'same' (follow the body colour) or a paint id. */
+export type PaintZoneSlot = 'paintHood' | 'paintRoof' | 'paintFront' | 'paintRear' | 'paintSkirts' | 'paintSpoiler';
+
+export type VisualSlot = GeoSlot | 'paint' | 'vinyl' | 'vinylColor' | 'rimColor' | PaintZoneSlot;
 
 export type TechSlot = 'engine' | 'turbo' | 'nitro' | 'tires' | 'suspension' | 'weight';
 
@@ -25,6 +19,8 @@ export interface PartOption {
   id: string;
   name: string;
   desc: string;
+  /** CSS background for a colour chip in the garage */
+  swatch?: string;
 }
 
 export interface PaintOption extends PartOption {
@@ -32,7 +28,15 @@ export interface PaintOption extends PartOption {
   metalness: number;
   roughness: number;
   clearcoat: number;
+  /** default vinyl colour for this paint */
   accent: number;
+  /** special finishes: woven carbon, or a colour-shift that turns to color2 at grazing angles */
+  finish?: 'carbon' | 'flip';
+  color2?: number;
+}
+
+export interface ColorOption extends PartOption {
+  color: number;
 }
 
 export interface TechMods {
@@ -86,7 +90,33 @@ export const TECH_SLOTS: { slot: TechSlot; label: string }[] = [
   { slot: 'weight', label: 'Peso' },
 ];
 
-export const VISUAL_PARTS: Record<Exclude<VisualSlot, 'paint'>, PartOption[]> = {
+/**
+ * Some garage entries open a row of sub-choices: the paint has one per body
+ * zone, vinyls and rims have their own colour.
+ */
+export const SUB_SLOTS: Partial<Record<VisualSlot, { slot: VisualSlot; label: string }[]>> = {
+  paint: [
+    { slot: 'paint', label: 'Carroçaria' },
+    { slot: 'paintHood', label: 'Capô' },
+    { slot: 'paintRoof', label: 'Tejadilho' },
+    { slot: 'paintFront', label: 'Frente' },
+    { slot: 'paintRear', label: 'Traseira' },
+    { slot: 'paintSkirts', label: 'Saias' },
+    { slot: 'paintSpoiler', label: 'Spoiler' },
+  ],
+  vinyl: [
+    { slot: 'vinyl', label: 'Padrão' },
+    { slot: 'vinylColor', label: 'Cor' },
+  ],
+  rims: [
+    { slot: 'rims', label: 'Modelo' },
+    { slot: 'rimColor', label: 'Cor' },
+  ],
+};
+
+export const PAINT_ZONE_SLOTS: PaintZoneSlot[] = ['paintHood', 'paintRoof', 'paintFront', 'paintRear', 'paintSkirts', 'paintSpoiler'];
+
+export const VISUAL_PARTS: Record<GeoSlot | 'vinyl', PartOption[]> = {
   body: [
     { id: 'gt', name: 'Coupé GT', desc: 'Cabine clássica de grande turismo.' },
     { id: 'fastback', name: 'Fastback', desc: 'Tejadilho longo que desce até à traseira.' },
@@ -137,8 +167,18 @@ export const VISUAL_PARTS: Record<Exclude<VisualSlot, 'paint'>, PartOption[]> = 
     { id: 'stripes', name: 'Faixas', desc: 'Faixas duplas de corrida.' },
     { id: 'side', name: 'Lateral', desc: 'Faixa lateral em flecha.' },
     { id: 'shards', name: 'Estilhaços', desc: 'Padrão geométrico nas laterais.' },
+    { id: 'checker', name: 'Xadrez', desc: 'Bandeira de xadrez a desfazer-se para trás.' },
+    { id: 'flames', name: 'Chamas', desc: 'Chamas hot-rod a sair da frente.' },
+    { id: 'camo', name: 'Camuflado', desc: 'Camuflado digital em três tons.' },
+    { id: 'tiger', name: 'Tigre', desc: 'Riscas de tigre por todo o carro.' },
+    { id: 'halftone', name: 'Pontilhado', desc: 'Degradê de pontos da traseira para a frente.' },
+    { id: 'livery', name: 'Competição', desc: 'Faixa diagonal e número de corrida.' },
+    { id: 'pinstripe', name: 'Filetes', desc: 'Filetes finos ao longo das linhas.' },
+    { id: 'hex', name: 'Favo', desc: 'Favo hexagonal nas partes de baixo.' },
   ],
 };
+
+const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 
 export const PAINTS: PaintOption[] = [
   { id: 'ruby', name: 'Vermelho Rubi', desc: 'Metalizado', color: 0xa3101a, metalness: 0.55, roughness: 0.32, clearcoat: 1, accent: 0xf2f2f2 },
@@ -149,6 +189,50 @@ export const PAINTS: PaintOption[] = [
   { id: 'acid', name: 'Verde Ácido', desc: 'Brilhante', color: 0x63c60e, metalness: 0.3, roughness: 0.28, clearcoat: 1, accent: 0x111111 },
   { id: 'chrome', name: 'Prata Líquida', desc: 'Metal', color: 0xb9c0c8, metalness: 0.95, roughness: 0.18, clearcoat: 0.6, accent: 0x0a0a0a },
   { id: 'neon', name: 'Roxo Neon', desc: 'Pérola', color: 0x6b1fd1, metalness: 0.45, roughness: 0.28, clearcoat: 1, accent: 0x18f0ff },
+  { id: 'yellow', name: 'Amarelo Corrida', desc: 'Brilhante', color: 0xf2c00c, metalness: 0.2, roughness: 0.3, clearcoat: 1, accent: 0x111111 },
+  { id: 'teal', name: 'Turquesa', desc: 'Metalizado', color: 0x0c9a98, metalness: 0.55, roughness: 0.3, clearcoat: 1, accent: 0xffffff },
+  { id: 'candy', name: 'Rosa Doce', desc: 'Candy', color: 0xd0125f, metalness: 0.6, roughness: 0.24, clearcoat: 1, accent: 0xffffff },
+  { id: 'gold', name: 'Ouro', desc: 'Metal', color: 0xc8952c, metalness: 0.92, roughness: 0.22, clearcoat: 0.8, accent: 0x111111 },
+  { id: 'gunmetal', name: 'Grafite', desc: 'Acetinado', color: 0x3a4047, metalness: 0.7, roughness: 0.45, clearcoat: 0.3, accent: 0xff6a00 },
+  { id: 'flip', name: 'Camaleão', desc: 'Muda de roxo para verde', color: 0x5a1ad6, color2: 0x10d690, metalness: 0.6, roughness: 0.25, clearcoat: 1, accent: 0xffffff, finish: 'flip' },
+  { id: 'sunset', name: 'Pôr-do-Sol', desc: 'Muda de laranja para magenta', color: 0xff5a1f, color2: 0xb0127a, metalness: 0.6, roughness: 0.25, clearcoat: 1, accent: 0x111111, finish: 'flip' },
+  { id: 'carbon', name: 'Carbono', desc: 'Fibra de carbono à vista', color: 0x16181c, metalness: 0.3, roughness: 0.3, clearcoat: 1, accent: 0xff2f3f, finish: 'carbon' },
+];
+for (const p of PAINTS) {
+  p.swatch =
+    p.finish === 'carbon'
+      ? 'repeating-linear-gradient(45deg,#111317 0 4px,#2c3036 4px 8px)'
+      : p.finish === 'flip'
+        ? `linear-gradient(135deg,${hex(p.color)},${hex(p.color2 ?? p.color)})`
+        : hex(p.color);
+}
+
+const SAME_PAINT: PartOption = { id: 'same', name: 'Igual à carroçaria', desc: 'Segue a cor principal.' };
+
+const color = (id: string, name: string, c: number, desc = ''): ColorOption => ({ id, name, desc, color: c, swatch: hex(c) });
+
+export const VINYL_COLORS: ColorOption[] = [
+  { id: 'auto', name: 'Automática', desc: 'Combina com a pintura.', color: -1, swatch: 'linear-gradient(135deg,#fff 50%,#111 50%)' },
+  color('white', 'Branco', 0xf4f4f4),
+  color('black', 'Preto', 0x0e0f12),
+  color('red', 'Vermelho', 0xe0141e),
+  color('yellow', 'Amarelo', 0xffcc12),
+  color('orange', 'Laranja', 0xff6a12),
+  color('lime', 'Lima', 0x7be014),
+  color('cyan', 'Ciano', 0x18e0ff),
+  color('magenta', 'Magenta', 0xff2fb4),
+  color('gold', 'Dourado', 0xd6a43a),
+];
+
+export const RIM_COLORS: ColorOption[] = [
+  { id: 'auto', name: 'De série', desc: 'A cor original da jante.', color: -1, swatch: 'linear-gradient(135deg,#d5dae0 50%,#3a3e44 50%)' },
+  color('silver', 'Prata', 0xd5dae0),
+  color('black', 'Preto brilhante', 0x111215),
+  color('gunmetal', 'Grafite', 0x4a4f57),
+  color('gold', 'Dourado', 0xc9a04a),
+  color('bronze', 'Bronze', 0x8a5a2b),
+  color('white', 'Branco', 0xf2f2f2),
+  { id: 'body', name: 'Cor do carro', desc: 'Pintadas como a carroçaria.', color: -1, swatch: 'linear-gradient(135deg,#888 0,#ccc 100%)' },
 ];
 
 export const TECH_PARTS: Record<TechSlot, TechOption[]> = {
@@ -198,6 +282,14 @@ export const DEFAULT_BUILD: CarBuild = {
   exhaust: 'quad',
   paint: 'volt',
   vinyl: 'stripes',
+  vinylColor: 'auto',
+  rimColor: 'auto',
+  paintHood: 'same',
+  paintRoof: 'matte',
+  paintFront: 'same',
+  paintRear: 'same',
+  paintSkirts: 'same',
+  paintSpoiler: 'same',
   engine: 'v6',
   turbo: 'twin',
   nitro: 'long',
@@ -208,9 +300,18 @@ export const DEFAULT_BUILD: CarBuild = {
 
 export function optionsFor(slot: Slot): PartOption[] {
   if (slot === 'paint') return PAINTS;
+  if ((PAINT_ZONE_SLOTS as string[]).includes(slot)) return [SAME_PAINT, ...PAINTS];
+  if (slot === 'vinylColor') return VINYL_COLORS;
+  if (slot === 'rimColor') return RIM_COLORS;
   if (slot in TECH_PARTS) return TECH_PARTS[slot as TechSlot];
-  return VISUAL_PARTS[slot as Exclude<VisualSlot, 'paint'>];
+  return VISUAL_PARTS[slot as GeoSlot | 'vinyl'];
 }
+
+/** Every slot that has its own garage entry or sub-entry. */
+const ALL_VISUAL: Slot[] = [
+  ...VISUAL_SLOTS.map((s) => s.slot),
+  ...Object.values(SUB_SLOTS).flatMap((l) => l!.map((s) => s.slot)),
+].filter((s, i, a) => a.indexOf(s) === i);
 
 export function paintById(id: string): PaintOption {
   return PAINTS.find((p) => p.id === id) ?? PAINTS[0];
@@ -220,7 +321,7 @@ export function techById(slot: TechSlot, id: string): TechOption {
   return TECH_PARTS[slot].find((o) => o.id === id) ?? TECH_PARTS[slot][0];
 }
 
-export const ALL_SLOTS: Slot[] = [...VISUAL_SLOTS.map((s) => s.slot), ...TECH_SLOTS.map((s) => s.slot)];
+export const ALL_SLOTS: Slot[] = [...ALL_VISUAL, ...TECH_SLOTS.map((s) => s.slot)];
 
 /** Makes sure a stored build only references parts that exist. */
 export function sanitizeBuild(b: Partial<CarBuild> | null | undefined): CarBuild {
@@ -243,7 +344,10 @@ export function randomBuild(seed: number): CarBuild {
   const out = { ...DEFAULT_BUILD };
   for (const slot of ALL_SLOTS) {
     const opts = optionsFor(slot);
-    out[slot] = opts[Math.floor(rnd() * opts.length)].id;
+    const pick = opts[Math.floor(rnd() * opts.length)].id;
+    // keep AI cars mostly one colour: a contrasting part here and there looks deliberate, all of them looks random
+    const keepDefault = (PAINT_ZONE_SLOTS as string[]).includes(slot) ? rnd() < 0.8 : slot === 'vinylColor' || slot === 'rimColor' ? rnd() < 0.5 : false;
+    out[slot] = keepDefault ? opts[0].id : pick;
   }
   return out;
 }
