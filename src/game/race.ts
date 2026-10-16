@@ -78,6 +78,7 @@ interface RaceCar {
 }
 
 export const LAPS = 3;
+const scratchFocus = new Vector3();
 const AI_NAMES = ['VEX', 'NOVA', 'ROOK'];
 const AI_SEEDS = [11, 42, 97];
 const AI_SKILL = [0.93, 0.96, 0.985];
@@ -143,6 +144,7 @@ export class Race {
       physics.reset(s, lat);
       const visual = buildCar(g.build);
       physics.hitbox = visual.hitbox;
+      world.sky.castShadows(visual.root);
       world.scene.add(visual.root);
       const car: RaceCar = {
         name: g.name,
@@ -293,7 +295,9 @@ export class Race {
     if (this.mode === 'attract') this.updateAttractCamera(camera, dt, t);
     else if (this.player) this.chase.update(camera, this.player.physics, dt, t);
     this.world.decor.update(dt, camera.position);
-    this.world.sky.update(t, camera.position, 20);
+    // shadows follow the player (or whatever the attract camera is looking at)
+    const focus = this.player ? this.player.physics.pos : camera.getWorldDirection(scratchFocus).multiplyScalar(18).add(camera.position);
+    this.world.sky.update(t, camera.position, 20, focus);
 
     // post fx + audio + hud
     if (this.player) {
