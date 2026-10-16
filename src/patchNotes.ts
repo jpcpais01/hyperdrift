@@ -6,6 +6,14 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
+      "Cockpit view, round two: the dashboard, gauges and steering wheel now sit below the windscreen line, so the road ahead is always in full view, and the camera sits a touch lower with a wider field of view. The rear-view mirror now really shows what's behind you, flipped like a real mirror.",
+      "All-new driver hands and arms: fully articulated gloves with knuckles, a thumb that wraps the rim and stitched cuffs, on smooth sleeves that bend at the elbow. Hands shuffle along the rim on tight turns, follow your head as you lean, and reach naturally for the gear lever and handbrake.",
+      "Interiors rebuilt in detail: grained leather, perforated seat inserts with contrast stitching, suede headliner, brushed metal trim, stitched door cards with armrests, speakers and map pockets, padded sun visors, an overhead console, a starter button and drive-mode dial, and in the racer a window net, fire pull and riveted carbon. Gauge dials now show clean numbers.",
+    ],
+  },
+  {
     hour: '2026-10-16 19:00 UTC',
     entries: [
       'Online multiplayer! Tap MULTIJOGADOR, create a room and share its 4-digit code (or the Convidar invite link) with up to 3 friends, who punch it in on the built-in number pad, no phone keyboard needed. Empty seats can be filled with AI rivals, everyone starts on the same countdown, rivals carry floating name tags, and the results board updates live as each driver crosses the line.',

@@ -855,6 +855,7 @@ export class Race {
       drifting: p.drifting,
       latAccel: p.yawRate * p.speed,
       parked: racing ? 0 : 1,
+      lean: this.chase.headLean,
     });
   }
 
