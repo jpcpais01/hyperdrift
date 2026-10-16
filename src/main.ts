@@ -6,6 +6,7 @@ import { randomBuild, sanitizeBuild, type CarBuild } from './car/parts';
 import { audio } from './core/audio';
 import { canLockLandscape, installFirstTouch, isIOS, isPhone, isPortrait, isStandalone, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
+import { cameraOrbit } from './game/cameraOrbit';
 import { tiltSupported } from './core/tilt';
 import { RENDER_SCALES, Renderer, renderScaleLabel } from './core/renderer';
 import { applyPendingUpdate, initUpdater } from './core/updater';
@@ -88,6 +89,7 @@ class App {
     this.build = storage.loadBuild();
     this.garageScene.setBuild(this.build);
     this.garageScene.bindDrag(canvas);
+    cameraOrbit.bind(canvas);
 
     this.hud = new Hud(ui);
     this.input = new Input(ui);
