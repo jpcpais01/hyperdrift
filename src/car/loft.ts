@@ -22,7 +22,12 @@ export interface Section {
 
 export const RING = 28; // points per half section
 
-function halfProfile(sec: Section): Vector2[] {
+/**
+ * Control points of the half profile. Point k sits at curve parameter k/8, so
+ * t = 0.5 is the shoulder (belt line on a cabin), t = 0.75 the top edge and
+ * t = 1 the top centre line.
+ */
+export function profileCurve(sec: Section): CatmullRomCurve3 {
   const c = sec.crisp ?? 0.5;
   const { yb, wb, ys, ws, yt, wt } = sec;
   const pts = [
@@ -37,12 +42,30 @@ function halfProfile(sec: Section): Vector2[] {
     new Vector3(0, yt, 0),
   ];
   const curve = new CatmullRomCurve3(pts, false, 'centripetal');
-  return curve.getSpacedPoints(RING - 1).map((p) => new Vector2(Math.max(0, p.x), p.y));
+  curve.arcLengthDivisions = 48;
+  return curve;
+}
+
+function halfProfile(sec: Section, n = RING): Vector2[] {
+  return profileCurve(sec)
+    .getSpacedPoints(n - 1)
+    .map((p) => new Vector2(Math.max(0, p.x), p.y));
+}
+
+/** Section at an arbitrary z, linearly interpolated from a (finely refined) list. */
+export function sectionAt(secs: Section[], z: number): Section {
+  const asc = secs[secs.length - 1].z > secs[0].z;
+  const list = asc ? secs : secs.slice().reverse();
+  if (z <= list[0].z) return { ...list[0], z };
+  for (let i = 0; i < list.length - 1; i++) {
+    if (z <= list[i + 1].z) return lerpSection(list[i], list[i + 1], (z - list[i].z) / Math.max(1e-6, list[i + 1].z - list[i].z));
+  }
+  return { ...list[list.length - 1], z };
 }
 
 /** Full ring (right half then mirrored left half), starting and ending at the bottom centre. */
-export function ring(sec: Section): Vector2[] {
-  const half = halfProfile(sec);
+export function ring(sec: Section, n = RING): Vector2[] {
+  const half = halfProfile(sec, n);
   const out = [...half];
   for (let i = half.length - 2; i >= 0; i--) out.push(new Vector2(-half[i].x, half[i].y));
   return out;
@@ -66,7 +89,7 @@ export function lerpSection(a: Section, b: Section, t: number): Section {
  * Smoothly resample a list of sections along z with a Catmull-Rom style
  * interpolation of every parameter so the loft has no visible kinks.
  */
-export function refine(secs: Section[], steps = 4): Section[] {
+export function refine(secs: Section[], steps: number | ((len: number) => number) = 4): Section[] {
   const out: Section[] = [];
   const keys: (keyof Section)[] = ['z', 'yb', 'wb', 'ys', 'ws', 'yt', 'wt', 'crisp'];
   for (let i = 0; i < secs.length - 1; i++) {
@@ -74,8 +97,9 @@ export function refine(secs: Section[], steps = 4): Section[] {
     const p1 = secs[i];
     const p2 = secs[i + 1];
     const p3 = secs[Math.min(secs.length - 1, i + 2)];
-    for (let k = 0; k < steps; k++) {
-      const t = k / steps;
+    const n = typeof steps === 'number' ? steps : Math.max(1, Math.round(steps(Math.abs(p2.z - p1.z))));
+    for (let k = 0; k < n; k++) {
+      const t = k / n;
       const s = {} as Section;
       for (const key of keys) {
         const a = (p0[key] ?? 0.5) as number;
@@ -105,8 +129,11 @@ function clampBetween(v: number, b: number, c: number, key: string) {
  * Loft a list of sections (ordered by z, any direction) into a closed mesh.
  * capStart/capEnd close the ends with a fan.
  */
-export function loft(secs: Section[], opts: { capStart?: boolean; capEnd?: boolean; tipStart?: Vector3; tipEnd?: Vector3 } = {}): BufferGeometry {
-  const rings = secs.map((s) => ring(s));
+export function loft(
+  secs: Section[],
+  opts: { capStart?: boolean; capEnd?: boolean; tipStart?: Vector3; tipEnd?: Vector3; ring?: number } = {},
+): BufferGeometry {
+  const rings = secs.map((s) => ring(s, opts.ring));
   const n = rings[0].length;
   const pos: number[] = [];
   const idx: number[] = [];

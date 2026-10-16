@@ -1,7 +1,8 @@
 import { PATCH_NOTES } from '../patchNotes';
 import {
   optionsFor,
-  PAINTS,
+  paintById,
+  SUB_SLOTS,
   TECH_SLOTS,
   VISUAL_SLOTS,
   type CarBuild,
@@ -95,8 +96,11 @@ export class GarageScreen {
   readonly el: HTMLElement;
   private tab: 'visual' | 'tech' = 'visual';
   private slot: Slot = 'body';
+  /** the chosen sub-entry when the slot has a row of them (paint zones, vinyl/rim colour) */
+  private sub: Slot = 'body';
   private build!: CarBuild;
   private slotsEl: HTMLElement;
+  private subEl: HTMLElement;
   private optsEl: HTMLElement;
   private statsEl: HTMLElement;
   onChange: ((b: CarBuild) => void) | null = null;
@@ -117,12 +121,14 @@ export class GarageScreen {
           <button data-tab="tech">Técnico</button>
         </div>
         <div class="slots"></div>
+        <div class="slots subslots"></div>
         <div class="options"></div>
         <div class="stats"></div>
       </aside>
       <div class="garage-hint">Arrasta para rodar o carro</div>`;
     root.appendChild(this.el);
     this.slotsEl = this.el.querySelector('.slots')!;
+    this.subEl = this.el.querySelector('.subslots')!;
     this.optsEl = this.el.querySelector('.options')!;
     this.statsEl = this.el.querySelector('.stats')!;
     this.el.querySelector('[data-a="back"]')!.addEventListener('click', () => {
@@ -138,6 +144,7 @@ export class GarageScreen {
         audio.click();
         this.tab = (b as HTMLElement).dataset.tab as 'visual' | 'tech';
         this.slot = this.tab === 'visual' ? VISUAL_SLOTS[0].slot : TECH_SLOTS[0].slot;
+        this.sub = this.slot;
         this.el.querySelectorAll('[data-tab]').forEach((x) => x.classList.toggle('on', x === b));
         this.render();
       }),
@@ -158,29 +165,58 @@ export class GarageScreen {
       b.addEventListener('click', () => {
         audio.click();
         this.slot = s.slot;
+        this.sub = s.slot;
         this.render();
       });
       this.slotsEl.appendChild(b);
     }
+    const subs = SUB_SLOTS[this.slot as keyof typeof SUB_SLOTS];
+    this.subEl.innerHTML = '';
+    this.subEl.classList.toggle('hidden', !subs);
+    if (!subs || !subs.some((x) => x.slot === this.sub)) this.sub = this.slot;
+    for (const s of subs ?? []) {
+      const sw = this.swatchOf(s.slot, this.build[s.slot]);
+      const b = h('button', s.slot === this.sub ? 'on' : '', `${sw ? `<i class="dot" style="background:${sw}"></i>` : ''}${esc(s.label)}`);
+      b.addEventListener('click', () => {
+        audio.click();
+        this.sub = s.slot;
+        this.render();
+      });
+      this.subEl.appendChild(b);
+    }
+    const slot = this.sub;
     this.optsEl.innerHTML = '';
-    const opts: PartOption[] = optionsFor(this.slot);
+    const opts: PartOption[] = optionsFor(slot);
     for (const o of opts) {
-      const card = h('button', `opt${this.build[this.slot] === o.id ? ' on' : ''}`);
-      const paint = this.slot === 'paint' ? PAINTS.find((p) => p.id === o.id) : null;
-      card.innerHTML = `${paint ? `<i class="swatch" style="background:#${paint.color.toString(16).padStart(6, '0')}"></i>` : ''}<b>${esc(o.name)}</b><small>${esc(o.desc)}</small>`;
+      const card = h('button', `opt${this.build[slot] === o.id ? ' on' : ''}`);
+      const sw = this.swatchOf(slot, o.id);
+      card.innerHTML = `${sw ? `<i class="swatch" style="background:${sw}"></i>` : ''}<b>${esc(o.name)}</b><small>${esc(o.desc)}</small>`;
       card.addEventListener('click', () => {
         audio.click();
-        this.build = { ...this.build, [this.slot]: o.id };
+        this.build = { ...this.build, [slot]: o.id };
         this.onChange?.(this.build);
         this.render();
       });
       card.addEventListener('pointerenter', (e) => {
-        if (e.pointerType === 'mouse') this.renderStats({ ...this.build, [this.slot]: o.id });
+        if (e.pointerType === 'mouse') this.renderStats({ ...this.build, [slot]: o.id });
       });
       card.addEventListener('pointerleave', () => this.renderStats());
       this.optsEl.appendChild(card);
     }
     this.renderStats();
+  }
+
+  /** CSS background of the colour an option stands for, or null for non-colour options. */
+  private swatchOf(slot: Slot, id: string): string | null {
+    const o = optionsFor(slot).find((x) => x.id === id);
+    if (!o?.swatch) {
+      // "same as the body" shows the body paint
+      if (id === 'same') return paintById(this.build.paint).swatch ?? null;
+      return null;
+    }
+    if (slot === 'vinylColor' && id === 'auto') return '#' + paintById(this.build.paint).accent.toString(16).padStart(6, '0');
+    if (slot === 'rimColor' && id === 'body') return paintById(this.build.paint).swatch ?? null;
+    return o.swatch;
   }
 
   private renderStats(preview?: CarBuild) {

@@ -271,6 +271,22 @@ button {
   font-size: 12px;
   font-weight: 600;
 }
+.subslots {
+  margin-top: -2px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--line);
+}
+.subslots button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.subslots .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
 .slots button.on {
   border-color: var(--accent);
   color: var(--accent);
