@@ -31,6 +31,7 @@ export class MenuScreen {
   onTimeTrial: (() => void) | null = null;
   onGarage: (() => void) | null = null;
   onToggleSound: (() => boolean) | null = null;
+  onPatchNotes: (() => void) | null = null;
 
   constructor(root: HTMLElement, muted: boolean) {
     this.el = h('div', 'screen menu hidden');
@@ -46,6 +47,7 @@ export class MenuScreen {
       </div>
       <div class="menu-foot">
         <button class="btn-icon" data-a="sound" aria-label="Som">${muted ? 'SOM: DESLIGADO' : 'SOM: LIGADO'}</button>
+        <button class="btn-icon" data-a="notes">PATCH NOTES</button>
         <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · travar a curvar = drift</span>
       </div>`;
     root.appendChild(this.el);
@@ -57,6 +59,7 @@ export class MenuScreen {
       if (a === 'race') this.onRace?.();
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
+      if (a === 'notes') this.onPatchNotes?.();
       if (a === 'sound' && this.onToggleSound) {
         const m = this.onToggleSound();
         b.textContent = m ? 'SOM: DESLIGADO' : 'SOM: LIGADO';

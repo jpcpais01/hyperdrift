@@ -9,6 +9,7 @@ import { Race, RaceWorld, type RaceMode } from './game/race';
 import { storage } from './storage';
 import { FpsCounter } from './ui/fps';
 import { Hud } from './ui/hud';
+import { PatchNotesScreen } from './ui/patchNotes';
 import { GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
@@ -53,6 +54,8 @@ class App {
     this.garage = new GarageScreen(ui);
     this.results = new ResultsScreen(ui);
     this.pause = new PauseScreen(ui);
+    const patchNotes = new PatchNotesScreen(ui);
+    this.menu.onPatchNotes = () => patchNotes.show(true);
     this.rotate = document.createElement('div');
     this.rotate.className = 'rotate-hint hidden';
     this.rotate.innerHTML = '<div><div class="phone"></div><p>Roda o telemóvel para jogar na horizontal</p></div>';
