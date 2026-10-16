@@ -8,6 +8,9 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      "Cockpit view, round two: the dashboard, gauges and steering wheel now sit below the windscreen line, so the road ahead is always in full view, and the camera sits a touch lower with a wider field of view. The rear-view mirror now really shows what's behind you, flipped like a real mirror.",
+      "All-new driver hands and arms: fully articulated gloves with knuckles, a thumb that wraps the rim and stitched cuffs, on smooth sleeves that bend at the elbow. Hands shuffle along the rim on tight turns, follow your head as you lean, and reach naturally for the gear lever and handbrake.",
+      "Interiors rebuilt in detail: grained leather, perforated seat inserts with contrast stitching, suede headliner, brushed metal trim, stitched door cards with armrests, speakers and map pockets, padded sun visors, an overhead console, a starter button and drive-mode dial, and in the racer a window net, fire pull and riveted carbon. Gauge dials now show clean numbers.",
       'The garage has been rebuilt to be much clearer. Pick a section (Exterior, Interior or Desempenho), then a category from a list that shows what is fitted on each part, with an icon and a line on what it changes. Opening a category lists its parts with a description, an EQUIPADO tag on the one you have, and for performance parts the exact stat changes (for example ▲ Aderência +2.8) before you even try them. Paints are a grid of colour chips, the camera swings to whatever category you highlight, and a new class rating (D to S, with a score) sums up your car and shows how much each part would raise or lower it.',
     ],
   },

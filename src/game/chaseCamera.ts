@@ -29,6 +29,11 @@ export class ChaseCamera {
   private look2 = { yaw: 0, pitch: 0, roll: 0 };
   private lastFwd = 0;
 
+  /** How far the driver's head (and body) leans under g-forces, car space. */
+  get headLean(): Vector3 {
+    return this.head;
+  }
+
   get zoomLevel(): CameraZoom {
     return this.zoom;
   }
@@ -63,7 +68,7 @@ export class ChaseCamera {
     this.head.y += (hy - this.head.y) * k(3);
     const slide = Math.atan2(-car.lateralSpeed, Math.max(6, Math.abs(fwd)));
     const yaw = Math.max(-0.45, Math.min(0.45, slide * 0.55 + car.steerVisual * 0.22));
-    const pitch = -0.1 + Math.max(-0.03, Math.min(0.03, longAcc * -0.0012)) + (car.grounded ? 0 : -0.04);
+    const pitch = -0.03 + Math.max(-0.03, Math.min(0.03, longAcc * -0.0012)) + (car.grounded ? 0 : -0.04);
     this.look2.yaw += (yaw - this.look2.yaw) * k(car.drifting ? 3.5 : 5);
     this.look2.pitch += (pitch - this.look2.pitch) * k(4);
     this.look2.roll += (-this.head.x * 1.2 - this.look2.roll) * k(5);
@@ -85,7 +90,7 @@ export class ChaseCamera {
     E.set(this.look2.pitch, Math.PI + this.look2.yaw, this.look2.roll, 'YXZ');
     cam.quaternion.copy(QB).multiply(Q.setFromEuler(E));
     cam.up.copy(car.draw.up);
-    const fov = 66 + Math.min(1.2, car.speed / car.stats.topSpeed) * 7 + car.boostFx * 9 + car.nitroFx * 3;
+    const fov = 70 + Math.min(1.2, car.speed / car.stats.topSpeed) * 7 + car.boostFx * 9 + car.nitroFx * 3;
     cam.fov += (fov - cam.fov) * k(6);
     cam.updateProjectionMatrix();
   }
