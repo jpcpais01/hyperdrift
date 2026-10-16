@@ -8,6 +8,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      'Underglow! A new NÉON category in the garage puts LED tubes under your car that pour coloured light onto the road, with 5 effects: steady Néon, a heartbeat Pulsar, Cometas that chase each other round the car, a flowing Arco-íris, and Reativo, which brightens and speeds up with your speed, flickers in drifts and burns white-hot on nitro. Pick from 10 colours (or your paint colour); the glow fades softly at the edges, lifts off the road on jumps, and shows on AI rivals and online cars too.',
       'The garage has been rebuilt to be much clearer. Pick a section (Exterior, Interior or Desempenho), then a category from a list that shows what is fitted on each part, with an icon and a line on what it changes. Opening a category lists its parts with a description, an EQUIPADO tag on the one you have, and for performance parts the exact stat changes (for example ▲ Aderência +2.8) before you even try them. Paints are a grid of colour chips, the camera swings to whatever category you highlight, and a new class rating (D to S, with a score) sums up your car and shows how much each part would raise or lower it.',
     ],
   },

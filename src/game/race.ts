@@ -841,6 +841,12 @@ export class Race {
       });
       v.materials.setBrake(c.lastInput.brake > 0 && p.forwardSpeed > 1 ? 1 : 0);
       v.exhaust?.update(dt, this.fxTime + c.place * 3.1, Math.max(0, p.boostFx - p.nitroFx), p.nitroFx);
+      v.underglow?.update(dt, this.fxTime + this.cars.indexOf(c) * 1.7, {
+        speed: Math.abs(p.forwardSpeed) / 70,
+        nitro: p.nitroFx,
+        drifting: p.drifting,
+        grounded: p.grounded,
+      });
     }
   }
 

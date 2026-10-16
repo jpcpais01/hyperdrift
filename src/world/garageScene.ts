@@ -212,6 +212,13 @@ export class GarageScene {
   }
 
   private updatePreview(dt: number, time: number) {
+    const ug = this.car?.underglow;
+    if (ug) {
+      // a slow throttle sweep so the reactive effect shows what it does on the turntable
+      const showing = this.focus === 'underglow' || this.focus === 'underglowColor';
+      ug.boost += ((showing ? 1.4 : 1) - ug.boost) * (1 - Math.exp(-3 * dt));
+      ug.update(dt, time, { speed: 0.5 - 0.5 * Math.cos(time * 0.6), nitro: this.demo?.nitroFx ?? 0, drifting: false, grounded: true });
+    }
     const d = this.demo;
     if (!d) {
       this.car?.exhaust?.update(dt, time, 0, 0);
