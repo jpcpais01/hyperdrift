@@ -26,6 +26,14 @@ export interface SegmentDef {
   boost?: boolean;
   pickups?: boolean;
   loop?: boolean;
+  /**
+   * Roll around a heartline this far above the deck (metres) instead of around
+   * the deck's centre line: a bank change then sweeps the deck round the inside
+   * of a tube, like a coaster corkscrew, so speed presses the car into it when
+   * it is upside down. On a segment without a bank change it only marks the
+   * tube's axis (for the tunnel rings).
+   */
+  heartline?: number;
 }
 
 export interface TrackSample {
@@ -37,6 +45,8 @@ export interface TrackSample {
   gap: boolean;
   tunnel: boolean;
   loop: boolean;
+  /** heartline height above the deck (0 = none) */
+  axis: number;
 }
 
 export interface BoostPad {
@@ -78,6 +88,8 @@ export class Track {
   /** world-space closure error that was spread over the lap (for tests) */
   readonly closureError: number;
   readonly closureVector: Vector3;
+  /** lowest point of the deck (world y), for catching cars that fell off */
+  readonly lowest: number;
 
   constructor(defs: SegmentDef[], start = new Vector3(0, 120, 0)) {
     const ds = 1;
@@ -104,7 +116,14 @@ export class Track {
         bank = bank0 + (bankEnd - bank0) * smooth(u);
         const f = dirFrom(yaw, p);
         const r = new Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
-        raw.push({ pos: pos.clone(), yaw, pitch: p, bank, def, shiftRight: r });
+        const deck = pos.clone();
+        if (def.heartline) {
+          // the turtle runs along the heartline; the deck hangs off it, opposite its up
+          const up0 = new Vector3().crossVectors(r, f);
+          const upB = up0.clone().multiplyScalar(Math.cos(bank)).addScaledVector(r, Math.sin(bank));
+          deck.addScaledVector(up0.sub(upB), def.heartline);
+        }
+        raw.push({ pos: deck, yaw, pitch: p, bank, def, shiftRight: r });
         pos.addScaledVector(f, ds);
         if (def.shift) pos.addScaledVector(r, def.shift / steps);
         s += ds;
@@ -145,8 +164,11 @@ export class Track {
         gap: !!r.def.gap,
         tunnel: !!r.def.tunnel,
         loop: !!r.def.loop,
+        axis: r.def.heartline ?? 0,
       });
     }
+
+    this.lowest = this.samples.reduce((m, smp) => Math.min(m, smp.pos.y), Infinity);
 
     // Boost pads and pickups along flagged segments.
     let acc = 0;
