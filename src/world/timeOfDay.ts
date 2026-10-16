@@ -114,7 +114,8 @@ export function dayState(hour: number, out: DayState = newDayState()): DayState 
   } else {
     out.lightDir.copy(out.moon);
     out.lightColor.copy(MOON);
-    out.lightIntensity = 0.7 * out.moonVis;
+    // a low moon glares off the paint: it comes up to strength as it climbs
+    out.lightIntensity = 1.15 * out.moonVis * smooth(0.0, 0.45, out.moon.y);
   }
   pal(out.hemiSky, HEMI_SKY.day, HEMI_SKY.gold, HEMI_SKY.night, out);
   pal(out.hemiGround, HEMI_GROUND.day, HEMI_GROUND.gold, HEMI_GROUND.night, out);

@@ -23,13 +23,16 @@ import {
   Vector3,
   Vector4,
   BoxGeometry,
+  CanvasTexture,
   CircleGeometry,
+  PlaneGeometry,
   type Material,
   type Texture,
 } from 'three';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { fbm3, islandGeometry, noise3 } from '../world/decor';
 import { SUN_DIR } from '../world/sky';
+import type { DayState } from '../world/timeOfDay';
 import { roadDetailTextures } from '../world/trackView';
 import {
   BANK_H,
@@ -342,6 +345,7 @@ const waterVert = /* glsl */ `
 
 const waterFrag = /* glsl */ `
   uniform float uTime;
+  uniform vec3 uLight;
   varying vec2 vUv;
   varying vec3 vW;
   float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * 0.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -361,7 +365,7 @@ const waterFrag = /* glsl */ `
     vec3 col = mix(deep, lit, clamp(foam, 0.0, 1.0));
     // mist thickens and catches the low sun towards the bottom
     col = mix(col, vec3(1.1, 0.85, 0.75), smoothstep(0.35, 1.0, vUv.y) * 0.6);
-    gl_FragColor = vec4(col, a);
+    gl_FragColor = vec4(col * uLight, a);
   }
 `;
 
@@ -422,6 +426,7 @@ const petalVert = /* glsl */ `
 `;
 
 const petalFrag = /* glsl */ `
+  uniform vec3 uLight;
   varying float vA;
   varying float vSpin;
   void main() {
@@ -430,7 +435,7 @@ const petalFrag = /* glsl */ `
     float a = smoothstep(0.5, 0.3, length(c * vec2(1.0, 1.6)));
     if (a < 0.02) discard;
     vec3 col = mix(vec3(1.0, 0.62, 0.74), vec3(1.15, 0.9, 0.95), abs(vSpin));
-    gl_FragColor = vec4(col, a * vA * 0.9);
+    gl_FragColor = vec4(col * uLight, a * vA * 0.9);
   }
 `;
 
@@ -449,10 +454,11 @@ const mistVert = /* glsl */ `
 `;
 
 const mistFrag = /* glsl */ `
+  uniform vec3 uLight;
   varying float vA;
   void main() {
     float a = smoothstep(0.5, 0.0, length(gl_PointCoord - 0.5));
-    gl_FragColor = vec4(vec3(1.05, 0.95, 0.92), a * vA);
+    gl_FragColor = vec4(vec3(1.05, 0.95, 0.92) * uLight, a * vA);
   }
 `;
 
@@ -472,6 +478,12 @@ export class ZoneView {
   private treeTime = { value: 0 };
   private gateGlow: MeshBasicMaterial[] = [];
   private hit = 0;
+  /** day light on the unlit, light-baked bits (shared by their shaders) */
+  private dayLight = new Color(1, 1, 1);
+  private baked: MeshBasicMaterial[] = [];
+  private lampGlow: { mat: MeshBasicMaterial; base: Color }[] = [];
+  private pools: MeshBasicMaterial | null = null;
+  private poolMesh: InstancedMesh | null = null;
 
   constructor(readonly layout: ZoneLayout) {
     const L = layout;
@@ -843,6 +855,7 @@ export class ZoneView {
       const warm = new MeshBasicMaterial({ color: new Color(3.2, 1.7, 0.7) });
       const warmOrb = new MeshBasicMaterial({ color: new Color(3.0, 2.3, 1.5) });
       this.materials.push(stoneMat, warm, warmOrb);
+      this.lampGlow.push({ mat: warm, base: warm.color.clone() }, { mat: warmOrb, base: warmOrb.color.clone() });
       const lg = lanternGeometry();
       const bodies = new InstancedMesh(lg.body, stoneMat, L.lanterns.length);
       const lights = new InstancedMesh(lg.light, warm, L.lanterns.length);
@@ -867,13 +880,14 @@ export class ZoneView {
         this.group.add(im);
       }
       bodies.castShadow = poles.castShadow = true;
+      this.group.add(this.lightPools(L));
     }
 
     // ---------------------------------------------------------------- waterfalls
     this.waterMat = new ShaderMaterial({
       vertexShader: waterVert,
       fragmentShader: waterFrag,
-      uniforms: { uTime: { value: 0 } },
+      uniforms: { uTime: { value: 0 }, uLight: { value: this.dayLight } },
       transparent: true,
       depthWrite: false,
       side: DoubleSide,
@@ -881,7 +895,7 @@ export class ZoneView {
     this.mistMat = new ShaderMaterial({
       vertexShader: mistVert,
       fragmentShader: mistFrag,
-      uniforms: { uTime: { value: 0 } },
+      uniforms: { uTime: { value: 0 }, uLight: { value: this.dayLight } },
       transparent: true,
       depthWrite: false,
       blending: NormalBlending,
@@ -903,6 +917,7 @@ export class ZoneView {
     {
       const isl = new Mesh(islandGeometry(4, 7), new MeshBasicMaterial({ vertexColors: true }));
       this.materials.push(isl.material as Material);
+      this.baked.push(isl.material as MeshBasicMaterial);
       const S = 80;
       isl.scale.set(S * 1.1, S, S * 0.9);
       isl.position.set(140, ZONE_Y - 38, 560);
@@ -956,7 +971,7 @@ export class ZoneView {
       this.petalMat = new ShaderMaterial({
         vertexShader: petalVert,
         fragmentShader: petalFrag,
-        uniforms: { uTime: { value: 0 }, uCam: { value: new Vector3() } },
+        uniforms: { uTime: { value: 0 }, uCam: { value: new Vector3() }, uLight: { value: this.dayLight } },
         transparent: true,
         depthWrite: false,
       });
@@ -965,6 +980,69 @@ export class ZoneView {
       petals.frustumCulled = false;
       petals.renderOrder = 6;
       this.group.add(petals);
+    }
+  }
+
+  /** Warm pools of lamplight on the ground, only there after dark. */
+  private lightPools(L: ZoneLayout): InstancedMesh {
+    const c = document.createElement('canvas');
+    c.width = c.height = 128;
+    const g = c.getContext('2d')!;
+    const grd = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    grd.addColorStop(0, 'rgba(255,255,255,1)');
+    grd.addColorStop(0.25, 'rgba(255,255,255,0.62)');
+    grd.addColorStop(0.6, 'rgba(255,255,255,0.18)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd;
+    g.fillRect(0, 0, 128, 128);
+    const tex = new CanvasTexture(c);
+    this.textures.push(tex);
+    const mat = new MeshBasicMaterial({
+      map: tex,
+      color: 0x000000,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      polygonOffset: true,
+      polygonOffsetFactor: -4,
+      fog: true,
+    });
+    this.materials.push(mat);
+    this.pools = mat;
+    const geo = new PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+    const spots: [number, number, number][] = [];
+    // under each lamp's head (the arm leans 1.4 m out over the road) and round each stone lantern
+    for (const l of L.lamps) {
+      const r = Math.hypot(l.x, l.z);
+      spots.push([l.x * (1 + 1.4 / r), l.z * (1 + 1.4 / r), 17]);
+    }
+    for (const l of L.lanterns) spots.push([l.x, l.z, 9]);
+    const im = new InstancedMesh(geo, mat, spots.length);
+    const m = new Matrix4();
+    const q = new Quaternion();
+    const n = new Vector3();
+    spots.forEach(([x, z, size], i) => {
+      L.normalAt(x, z, n);
+      q.setFromUnitVectors(UP, n);
+      m.compose(new Vector3(x, L.baseHeight(x, z) + 0.06, z), q, new Vector3(size, 1, size));
+      im.setMatrixAt(i, m);
+    });
+    im.computeBoundingSphere();
+    im.renderOrder = 2;
+    im.visible = false;
+    this.poolMesh = im;
+    return im;
+  }
+
+  /** Time of day: dim the light-baked rock and water at night, turn the lamps up and pool their light. */
+  setDay(s: DayState) {
+    this.dayLight.copy(s.ambient);
+    for (const m of this.baked) m.color.copy(s.ambient);
+    const lit = Math.max(s.night, s.twilight * 0.6);
+    for (const { mat, base } of this.lampGlow) mat.color.copy(base).multiplyScalar(1 + 1.3 * lit);
+    if (this.pools) {
+      this.pools.color.setRGB(1.0, 0.62, 0.3).multiplyScalar(0.85 * lit);
+      if (this.poolMesh) this.poolMesh.visible = lit > 0.01;
     }
   }
 
@@ -1069,6 +1147,7 @@ export class ZoneView {
     g.computeBoundingSphere();
     const mat = new MeshBasicMaterial({ vertexColors: true, side: DoubleSide });
     this.materials.push(mat);
+    this.baked.push(mat);
     out.add(new Mesh(g, mat));
 
     // anti-gravity crystal cluster at the very bottom
