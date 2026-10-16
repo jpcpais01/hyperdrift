@@ -84,7 +84,9 @@ export class Hud {
     grade: HTMLElement;
     bank: HTMLElement;
     intro: HTMLElement;
+    board: HTMLElement;
   };
+  private boardKey = '';
   private shownBest = -1;
   private shownTotal = -1;
   private bankTimer = 0;
@@ -119,6 +121,7 @@ export class Hud {
         <div class="hz-title">ZONA LIVRE</div>
         <div class="hz-row">RECORDE <b class="hz-best">0</b></div>
         <div class="hz-row">TOTAL <b class="hz-total">0</b></div>
+        <ol class="hz-board"></ol>
       </div>
       <div class="hud-drift">
         <div class="hd-label">DRIFT</div>
@@ -159,6 +162,7 @@ export class Hud {
       grade: q('.hd-grade'),
       bank: q('.hud-bank'),
       intro: q('.hud-intro'),
+      board: q('.hz-board'),
     };
     this.camBtn = q('.hud-cam');
     this.camBtn.addEventListener('click', () => {
@@ -272,6 +276,27 @@ export class Hud {
     this.shownBest = this.shownTotal = -1;
     this.zone.best.textContent = formatScore(s.best);
     this.zone.total.textContent = formatScore(s.total);
+  }
+
+  /** Online: everybody in the zone, most points first (null hides it). */
+  setZoneBoard(rows: { name: string; color: string; total: number; me: boolean }[] | null) {
+    const key = rows ? JSON.stringify(rows) : '';
+    if (key === this.boardKey) return;
+    this.boardKey = key;
+    const b = this.zone.board;
+    b.replaceChildren();
+    for (const r of rows ?? []) {
+      const li = document.createElement('li');
+      if (r.me) li.className = 'me';
+      const dot = document.createElement('i');
+      dot.style.background = r.color;
+      const name = document.createElement('span');
+      name.textContent = r.name;
+      const pts = document.createElement('b');
+      pts.textContent = formatScore(r.total);
+      li.append(dot, name, pts);
+      b.appendChild(li);
+    }
   }
 
   zoneIntro(v: boolean) {

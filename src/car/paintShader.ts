@@ -23,6 +23,7 @@ uniform vec4 uZoneMat[8];
 uniform vec3 uAccent;
 uniform float uVinyl;
 uniform vec4 uHood;
+uniform vec3 uDoor;
 uniform float uNumber;
 
 float band(float d, float w) { float aa = fwidth(d) * 1.2 + 1e-4; return 1.0 - smoothstep(w - aa, w + aa, d); }
@@ -52,11 +53,11 @@ float panelLines(vec3 p, vec3 n) {
   float inHoodX = step(ax, uHood.z);
   float inHoodZ = step(uHood.x, p.z) * step(p.z, uHood.y);
   float w = 0.0032;
-  float l = side * step(0.3, p.y) * step(p.y, 0.86) * max(band(abs(p.z - 0.84), w), band(abs(p.z + 0.64), w));
+  float l = side * step(0.3, p.y) * step(p.y, 0.92) * max(band(abs(p.z - uDoor.x), w), band(abs(p.z - uDoor.y), w));
   l = max(l, top * inHoodZ * band(abs(ax - uHood.z), w));
   l = max(l, top * inHoodX * max(band(abs(p.z - uHood.y), w), band(abs(p.z - uHood.x - 0.01), w)));
   l = max(l, band(abs(abs(p.z) - 1.78), w) * (1.0 - top * inHoodX * inHoodZ));
-  if (p.x > 0.0) l = max(l, side * band(abs(length(vec2(p.z + 0.98, p.y - 0.72)) - 0.05), w));
+  if (p.x > 0.0) l = max(l, side * band(abs(length(vec2(p.z - uDoor.z, p.y - 0.72)) - 0.05), w));
   return clamp(l, 0.0, 1.0);
 }
 

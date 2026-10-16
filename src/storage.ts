@@ -1,5 +1,6 @@
 import { sanitizeBuild, type CarBuild } from './car/parts';
 import type { ControlMode } from './core/input';
+import { RENDER_SCALES, type RenderScale } from './core/renderer';
 import type { TiltSens } from './core/tilt';
 import type { CameraZoom } from './game/chaseCamera';
 import type { GhostLap } from './game/ghost';
@@ -12,6 +13,8 @@ export interface Settings {
   tiltSens: TiltSens;
   /** Calibrated straight-ahead wheel angle, radians. */
   tiltCenter: number;
+  /** Render resolution: 'auto' (dynamic) or a fixed share of native. */
+  resolution: RenderScale;
 }
 
 const KEY_BUILD = 'hyperdrift.build.v1';
@@ -19,6 +22,7 @@ const KEY_GHOST = 'hyperdrift.ghost.v1';
 const KEY_SETTINGS = 'hyperdrift.settings.v1';
 const KEY_RECORDS = 'hyperdrift.records.v1';
 const KEY_ZONE = 'hyperdrift.zone.v1';
+const KEY_CALLSIGN = 'hyperdrift.callsign.v1';
 
 function get<T>(key: string): T | null {
   try {
@@ -53,12 +57,14 @@ export const storage = {
       controls: 'buttons',
       tiltSens: 1,
       tiltCenter: 0,
+      resolution: 'auto',
       ...(get<Partial<Settings>>(KEY_SETTINGS) ?? {}),
     };
     if (s.camZoom !== 0 && s.camZoom !== 1 && s.camZoom !== 2) s.camZoom = 1;
     if (s.controls !== 'buttons' && s.controls !== 'tilt') s.controls = 'buttons';
     if (s.tiltSens !== 0 && s.tiltSens !== 1 && s.tiltSens !== 2) s.tiltSens = 1;
     if (typeof s.tiltCenter !== 'number' || !isFinite(s.tiltCenter) || Math.abs(s.tiltCenter) > 1.2) s.tiltCenter = 0;
+    if (!RENDER_SCALES.includes(s.resolution)) s.resolution = 'auto';
     return s;
   },
   saveSettings: (s: Settings) => set(KEY_SETTINGS, s),
@@ -70,4 +76,9 @@ export const storage = {
     return z && typeof z.bestDrift === 'number' && isFinite(z.bestDrift) ? Math.max(0, z.bestDrift) : 0;
   },
   saveBestDrift: (bestDrift: number) => set(KEY_ZONE, { bestDrift }),
+  loadCallSign: (): string | null => {
+    const n = get<string>(KEY_CALLSIGN);
+    return typeof n === 'string' && n.length > 0 && n.length <= 16 ? n : null;
+  },
+  saveCallSign: (n: string) => set(KEY_CALLSIGN, n),
 };
