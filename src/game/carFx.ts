@@ -108,4 +108,10 @@ export function poseCar(p: CarPhysics, v: CarVisual, brake: number, dt: number, 
   });
   v.materials.setBrake(brake > 0 && p.forwardSpeed > 1 ? 1 : 0);
   v.exhaust?.update(dt, fxTime, Math.max(0, p.boostFx - p.nitroFx), p.nitroFx);
+  v.underglow?.update(dt, fxTime, {
+    speed: Math.abs(p.forwardSpeed) / 70,
+    nitro: p.nitroFx,
+    drifting: p.drifting,
+    grounded: p.grounded,
+  });
 }
