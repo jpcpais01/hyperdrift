@@ -468,8 +468,8 @@ export class Decor {
     const mat = new MeshBasicMaterial({ vertexColors: true });
     this.materials.push(mat);
     for (let v = 0; v < ISLAND_VARIANTS; v++) {
-      const hi = new InstancedMesh(islandGeometry(4, v + 1), mat, this.islands.length);
-      const lo = new InstancedMesh(islandGeometry(2, v + 1), mat, this.islands.length);
+      const hi = new InstancedMesh(islandGeometry(7, v + 1), mat, this.islands.length);
+      const lo = new InstancedMesh(islandGeometry(3, v + 1), mat, this.islands.length);
       hi.frustumCulled = lo.frustumCulled = false;
       this.hi.push(hi);
       this.lo.push(lo);
@@ -481,7 +481,11 @@ export class Decor {
       const trees: { p: Vector3; s: number; kind: 0 | 1 }[] = [];
       for (const isl of this.islands) {
         if (isl.scale < 22 || isl.scale > 150) continue;
-        const count = Math.floor(isl.scale * (isl.hero ? 1.6 : 0.7));
+        // forests only where you can make them out: on islands that come within sight of the deck
+        let near = isl.hero;
+        for (let i = 0; i < track.samples.length && !near; i += 25) near = track.samples[i].pos.distanceTo(isl.pos) < 420 + isl.scale;
+        if (!near) continue;
+        const count = Math.floor(isl.scale * (isl.hero ? 1.6 : 0.6));
         for (let k = 0; k < count; k++) {
           const a = rnd() * Math.PI * 2;
           const r = Math.sqrt(rnd()) * 0.62;

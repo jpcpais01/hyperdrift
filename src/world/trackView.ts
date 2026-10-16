@@ -431,7 +431,7 @@ export class TrackView {
       const smp = track.samples[i];
       if (smp.tunnel && i % RING_SPACING === 0) ringS.push(i);
     }
-    ringS.forEach((_, k) => this.ringColors.push(new Color().setHSL((0.52 + k * 0.035) % 1, 1, 0.5).multiplyScalar(2.6)));
+    ringS.forEach((_, k) => this.ringColors.push(new Color().setHSL((0.52 + k * 0.035) % 1, 1, 0.5).multiplyScalar(2.2)));
 
     const ringLight = (i: number, out: Color) => {
       out.setRGB(0, 0, 0);
