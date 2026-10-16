@@ -1,10 +1,17 @@
 import { sanitizeBuild, type CarBuild } from './car/parts';
+import type { ControlMode } from './core/input';
+import type { TiltSens } from './core/tilt';
 import type { CameraZoom } from './game/chaseCamera';
 import type { GhostLap } from './game/ghost';
 
 export interface Settings {
   muted: boolean;
   camZoom: CameraZoom;
+  /** Mobile steering: on-screen buttons or tilting the phone. */
+  controls: ControlMode;
+  tiltSens: TiltSens;
+  /** Calibrated straight-ahead wheel angle, radians. */
+  tiltCenter: number;
 }
 
 const KEY_BUILD = 'hyperdrift.build.v1';
@@ -39,8 +46,18 @@ export const storage = {
   },
   saveGhost: (g: GhostLap) => set(KEY_GHOST, g),
   loadSettings: (): Settings => {
-    const s = { muted: false, camZoom: 1 as CameraZoom, ...(get<Partial<Settings>>(KEY_SETTINGS) ?? {}) };
+    const s: Settings = {
+      muted: false,
+      camZoom: 1,
+      controls: 'buttons',
+      tiltSens: 1,
+      tiltCenter: 0,
+      ...(get<Partial<Settings>>(KEY_SETTINGS) ?? {}),
+    };
     if (s.camZoom !== 0 && s.camZoom !== 1 && s.camZoom !== 2) s.camZoom = 1;
+    if (s.controls !== 'buttons' && s.controls !== 'tilt') s.controls = 'buttons';
+    if (s.tiltSens !== 0 && s.tiltSens !== 1 && s.tiltSens !== 2) s.tiltSens = 1;
+    if (typeof s.tiltCenter !== 'number' || !isFinite(s.tiltCenter) || Math.abs(s.tiltCenter) > 1.2) s.tiltCenter = 0;
     return s;
   },
   saveSettings: (s: Settings) => set(KEY_SETTINGS, s),

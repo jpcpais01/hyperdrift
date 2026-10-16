@@ -4,13 +4,14 @@ import type { CarBuild } from './car/parts';
 import { audio } from './core/audio';
 import { installFirstTouch, isPortrait, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
+import { tiltSupported } from './core/tilt';
 import { Renderer } from './core/renderer';
 import { CAMERA_ZOOM_LABELS, type CameraZoom } from './game/chaseCamera';
 import { Race, RaceWorld, type RaceMode } from './game/race';
 import { storage } from './storage';
 import { FpsCounter } from './ui/fps';
 import { Hud } from './ui/hud';
-import { GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
+import { ControlsPanel, GarageScreen, MenuScreen, PauseScreen, ResultsScreen } from './ui/screens';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
 
@@ -27,6 +28,7 @@ class App {
   private garage: GarageScreen;
   private results: ResultsScreen;
   private pause: PauseScreen;
+  private controls: ControlsPanel | null = null;
   private rotate: HTMLElement;
   private state: State = 'menu';
   private race: Race | null = null;
@@ -51,10 +53,54 @@ class App {
 
     this.hud = new Hud(ui);
     this.input = new Input(ui);
-    this.menu = new MenuScreen(ui, this.settings.muted);
+    // gyroscope steering is a phone thing: only offered on touch devices with the sensor API
+    const canTilt = isTouch() && tiltSupported();
+    const controlsLabel = () => (this.settings.controls === 'tilt' ? 'CONTROLOS: INCLINAÇÃO' : 'CONTROLOS: BOTÕES');
+    this.menu = new MenuScreen(ui, this.settings.muted, canTilt ? controlsLabel() : null);
     this.garage = new GarageScreen(ui);
     this.results = new ResultsScreen(ui);
-    this.pause = new PauseScreen(ui);
+    this.pause = new PauseScreen(ui, canTilt);
+    if (canTilt) {
+      const tilt = this.input.tilt;
+      tilt.sens = this.settings.tiltSens;
+      tilt.center = this.settings.tiltCenter;
+      this.input.onRecenter = (c) => {
+        this.settings.tiltCenter = c;
+        storage.saveSettings(this.settings);
+      };
+      const panel = new ControlsPanel(ui, this.input, this.settings);
+      panel.onChange = () => {
+        storage.saveSettings(this.settings);
+        this.menu.setControlsLabel(controlsLabel());
+      };
+      panel.onClose = () => {
+        if (this.state === 'race' && this.race?.paused) this.pause.show(true);
+      };
+      this.menu.onControls = () => panel.show(true);
+      this.pause.onControls = () => {
+        this.pause.show(false);
+        panel.show(true);
+      };
+      this.controls = panel;
+      if (this.settings.controls === 'tilt') {
+        this.input.setMode('tilt');
+        // iOS forgets sensor permission between visits: ask again on the first tap
+        if (tilt.needsGesture) {
+          const ask = () => {
+            window.removeEventListener('click', ask, true);
+            void tilt.request().then((ok) => {
+              if (!ok) {
+                this.settings.controls = 'buttons';
+                this.input.setMode('buttons');
+                storage.saveSettings(this.settings);
+                this.menu.setControlsLabel(controlsLabel());
+              }
+            });
+          };
+          window.addEventListener('click', ask, true);
+        }
+      }
+    }
     this.rotate = document.createElement('div');
     this.rotate.className = 'rotate-hint hidden';
     this.rotate.innerHTML = '<div><div class="phone"></div><p>Roda o telemóvel para jogar na horizontal</p></div>';
@@ -115,6 +161,7 @@ class App {
     if (!this.race) return;
     this.race.paused = p;
     this.pause.show(p);
+    if (!p) this.controls?.show(false);
     this.input.clear();
     if (audio.ctx) {
       if (p) void audio.ctx.suspend();
@@ -138,6 +185,7 @@ class App {
     this.garage.show(state === 'garage', this.build);
     this.results.show(null);
     this.pause.show(false);
+    this.controls?.show(false);
     this.input.setTouchVisible(false);
     if (state === 'menu') {
       // the menu backdrop is a live AI race
@@ -161,6 +209,7 @@ class App {
     this.garage.show(false);
     this.results.show(null);
     this.pause.show(false);
+    this.controls?.show(false);
     this.input.clear();
     this.input.setTouchVisible(isTouch());
     this.world.attach();
