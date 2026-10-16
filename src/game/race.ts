@@ -13,6 +13,7 @@ import type { Sky } from '../world/sky';
 import { TrackView } from '../world/trackView';
 import type { Hud } from '../ui/hud';
 import { AiDriver } from './ai';
+import { collideCars, type CarContact } from './carCollision';
 import { CarPhysics, type DriveInput } from './carPhysics';
 import { ChaseCamera, type CameraZoom } from './chaseCamera';
 import { GhostPlayer, GhostRecorder, type GhostLap } from './ghost';
@@ -84,6 +85,10 @@ const FIXED = 1 / 120;
 
 export class Race {
   readonly cars: RaceCar[] = [];
+  private physicsList: CarPhysics[] = [];
+  private contacts: CarContact[] = [];
+  private bumpCooldown = 0;
+  private scrapeCooldown = 0;
   private player: RaceCar | null = null;
   private chase = new ChaseCamera();
   private countdown: number;
@@ -137,6 +142,7 @@ export class Race {
       const lat = mode === 'timetrial' ? 0 : i % 2 ? 4.2 : -4.2;
       physics.reset(s, lat);
       const visual = buildCar(g.build);
+      physics.hitbox = visual.hitbox;
       world.scene.add(visual.root);
       const car: RaceCar = {
         name: g.name,
@@ -159,6 +165,7 @@ export class Race {
         wrongWay: 0,
       };
       this.cars.push(car);
+      this.physicsList.push(physics);
       if (car.isPlayer) this.player = car;
     });
 
@@ -221,7 +228,9 @@ export class Race {
 
     // inputs
     const playerInput = this.input && this.player && racing && !this.player.finished ? this.input.read(dt) : { throttle: 0, brake: 0, steer: 0 };
-    const physicsList = this.cars.map((c) => c.physics);
+    const physicsList = this.physicsList;
+    this.bumpCooldown -= dt;
+    this.scrapeCooldown -= dt;
     const leader = this.player ? this.progress(this.player) : 0;
     for (const c of this.cars) {
       if (!racing) {
@@ -450,38 +459,29 @@ export class Race {
   }
 
   private collide() {
-    const n = this.cars.length;
-    for (let i = 0; i < n; i++) {
-      for (let j = i + 1; j < n; j++) {
-        const a = this.cars[i].physics;
-        const b = this.cars[j].physics;
-        const d = TMP.copy(b.pos).sub(a.pos);
-        // ellipse-ish: cars are longer than wide
-        const along = d.dot(a.fwd);
-        const side = d.dot(a.right);
-        const vert = d.dot(a.up);
-        if (Math.abs(vert) > 2) continue;
-        const nd = Math.hypot(along / 2.3, side / 1.15);
-        if (nd >= 1 || nd < 1e-4) continue;
-        const normal = TMP2.copy(d).addScaledVector(a.up, -vert).normalize();
-        const overlap = (1 - nd) * (Math.abs(side) > Math.abs(along) / 2 ? 2.3 : 4.6) * 0.5;
-        const ma = a.stats.mass;
-        const mb = b.stats.mass;
-        const wa = mb / (ma + mb);
-        const wb = ma / (ma + mb);
-        a.pos.addScaledVector(normal, -overlap * wa);
-        b.pos.addScaledVector(normal, overlap * wb);
-        const rel = TMP3.copy(b.vel).sub(a.vel).dot(normal);
-        if (rel < 0) {
-          const imp = -rel * 1.3;
-          a.vel.addScaledVector(normal, -imp * wa);
-          b.vel.addScaledVector(normal, imp * wb);
-          const pl = this.player?.physics;
-          if ((a === pl || b === pl) && imp > 2) {
-            audio.wall(Math.min(1, imp / 15));
-            this.chase.addShake(Math.min(0.6, imp / 20));
-          }
-        }
+    const contacts = collideCars(this.physicsList, this.contacts);
+    const pl = this.player?.physics;
+    const parts = this.world.particles;
+    for (const ct of contacts) {
+      const hard = Math.min(1, ct.impulse / 14);
+      // sparks fly out of the contact, carried along by the cars
+      const n = Math.min(14, Math.round(ct.impulse * 0.9 + ct.scrape * 0.15));
+      const carry = TMP3.copy(ct.a.vel).add(ct.b.vel).multiplyScalar(0.5);
+      for (let k = 0; k < n; k++) {
+        const out = Math.random() < 0.5 ? 1 : -1;
+        const v = TMP2.set((Math.random() - 0.5) * 7, 1.5 + Math.random() * 5, (Math.random() - 0.5) * 7)
+          .addScaledVector(ct.normal, out * (2 + ct.impulse * 0.4))
+          .add(carry);
+        parts.emit(TMP.copy(ct.point).addScaledVector(ct.a.up, 0.45 + Math.random() * 0.3), v, k % 3 ? SPARK : SPARK_HOT, 1, 0.1 + 0.06 * hard, 0.25 + 0.3 * Math.random(), 0, 1.4);
+      }
+      if (ct.a !== pl && ct.b !== pl) continue;
+      if (ct.impulse > 1.2 && this.bumpCooldown <= 0) {
+        audio.bump(0.25 + hard * 0.75);
+        this.chase.addShake(0.15 + hard * 0.55);
+        this.bumpCooldown = 0.12;
+      } else if (ct.scrape > 3 && this.scrapeCooldown <= 0) {
+        audio.scrape(ct.scrape / 20);
+        this.scrapeCooldown = 0.07;
       }
     }
   }
