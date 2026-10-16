@@ -85,6 +85,7 @@ export class Hud {
     bank: HTMLElement;
     intro: HTMLElement;
     board: HTMLElement;
+    clock: HTMLElement;
   };
   private boardKey = '';
   private shownBest = -1;
@@ -119,6 +120,7 @@ export class Hud {
       <div class="hud-wrong">SENTIDO ERRADO</div>
       <div class="hud-zone">
         <div class="hz-title">ZONA LIVRE</div>
+        <div class="hz-clock"><i></i><b>--:--</b></div>
         <div class="hz-row">RECORDE <b class="hz-best">0</b></div>
         <div class="hz-row">TOTAL <b class="hz-total">0</b></div>
         <ol class="hz-board"></ol>
@@ -163,6 +165,7 @@ export class Hud {
       bank: q('.hud-bank'),
       intro: q('.hud-intro'),
       board: q('.hz-board'),
+      clock: q('.hz-clock'),
     };
     this.camBtn = q('.hud-cam');
     this.camBtn.addEventListener('click', () => {
@@ -276,6 +279,13 @@ export class Hud {
     this.shownBest = this.shownTotal = -1;
     this.zone.best.textContent = formatScore(s.best);
     this.zone.total.textContent = formatScore(s.total);
+  }
+
+  /** The zone's time of day, with a sun or a moon. */
+  setZoneClock(label: string, night: boolean) {
+    const c = this.zone.clock;
+    c.querySelector('b')!.textContent = label;
+    c.classList.toggle('night', night);
   }
 
   /** Online: everybody in the zone, most points first (null hides it). */

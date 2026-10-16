@@ -219,6 +219,10 @@ class App {
     this.hud.onCamera = cycleCamera;
     this.hud.onPause = togglePause;
     this.pause.onResume = () => this.setPaused(false);
+    this.pause.onTime = (h, run) => {
+      this.zone?.setClock(h, run);
+      if (this.zone) this.pause.setTime(this.zone.clock);
+    };
     this.pause.onRestart = () => {
       if (this.state !== 'zone' || !this.zone) return this.startRace(this.raceMode);
       this.zone.restart();
@@ -352,6 +356,7 @@ class App {
     this.pause.setOnline(!!net, true);
     const zone = new FreeRoam(this.zoneWorld, this.build, this.input, this.hud, storage.loadBestDrift(), net);
     zone.onBest = (b) => storage.saveBestDrift(b);
+    this.pause.setTime(zone.clock);
     zone.setCameraZoom(this.settings.camZoom, true);
     this.hud.setCameraZoom(this.settings.camZoom);
     this.zone = zone;
@@ -378,6 +383,7 @@ class App {
     const ghost = mode === 'timetrial' ? storage.loadGhost() : null;
     const net = session && this.room ? { room: this.room, grid: (session.payload as RacePayload).grid, startAt: this.room.toLocal(session.at) } : null;
     this.pause.setOnline(!!net);
+    this.pause.setTime(null);
     const race = new Race(this.world, mode, this.build, this.input, this.hud, ghost, net);
     race.setCameraZoom(this.settings.camZoom, true);
     this.hud.setCameraZoom(this.settings.camZoom);
@@ -585,6 +591,8 @@ class App {
       this.garageScene.renderMirror(this.renderer.gl);
     } else if (this.zone) {
       this.zone.update(needRotate && !this.zone.net ? 0 : dt, this.renderer);
+      // the time of day keeps moving (and the host can move it) while the pause menu is up
+      if (!this.pause.el.classList.contains('hidden')) this.pause.setTime(this.zone.clock);
     } else if (this.race) {
       // an online race can't wait for anybody to turn their phone
       this.race.update(needRotate && !this.race.net ? 0 : dt, this.renderer);
