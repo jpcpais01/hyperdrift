@@ -126,7 +126,7 @@ const FRAG = /* glsl */ `
       float coreW = 0.22 * (1.0 - 0.6 * t);
       float core = exp(-(s * s) / (coreW * coreW)) * (1.0 - smoothstep(0.0, 0.7, t));
       // standing shock diamonds in the core of a nitro jet
-      float dia = pow(0.5 + 0.5 * cos((t * 4.2 - 0.12) * 6.2831), 10.0);
+      float dia = pow(max(0.5 + 0.5 * cos((t * 4.2 - 0.12) * 6.2831), 0.0), 10.0);
       dia *= exp(-(s * s) / 0.09) * (1.0 - smoothstep(0.05, 0.7, t)) * uNitro;
       float erode = 1.0 - smoothstep(0.42, 1.0, t + (n - 0.5) * 0.55);
       float lick = 0.65 + 0.7 * n;
