@@ -8,6 +8,12 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 20:00 UTC',
     entries: [
+      'Underglow! A new NÉON category in the garage puts LED tubes under your car that pour coloured light onto the road, with 5 effects: steady Néon, a heartbeat Pulsar, Cometas that chase each other round the car, a flowing Arco-íris, and Reativo, which brightens and speeds up with your speed, flickers in drifts and burns white-hot on nitro. Pick from 10 colours (or your paint colour); the glow fades softly at the edges, lifts off the road on jumps, and shows on AI rivals and online cars too.',
+    ],
+  },
+  {
+    hour: '2026-10-16 20:00 UTC',
+    entries: [
       'Nitro is alive now: every pipe surges on its own, flaring into huge, white-hot bursts, then choking down to sputtering puffs of violet gas before roaring back. Lighting it blows a big flare, shutting it off throws a last cloud off the pipes followed by a few crackles, the glow on the road breathes with each surge, and the engine note, camera shake, field of view and blue screen edge all kick with the big bursts.',
     ],
   },

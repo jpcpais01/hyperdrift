@@ -10,7 +10,7 @@ export type GeoSlot = 'body' | 'front' | 'rear' | 'hood' | 'skirts' | 'spoiler' 
 /** Per-part paint: each one is 'same' (follow the body colour) or a paint id. */
 export type PaintZoneSlot = 'paintHood' | 'paintRoof' | 'paintFront' | 'paintRear' | 'paintSkirts' | 'paintSpoiler';
 
-export type VisualSlot = GeoSlot | 'paint' | 'vinyl' | 'vinylColor' | 'rimColor' | PaintZoneSlot;
+export type VisualSlot = GeoSlot | 'paint' | 'vinyl' | 'vinylColor' | 'rimColor' | 'underglow' | 'underglowColor' | PaintZoneSlot;
 
 export type TechSlot = 'engine' | 'turbo' | 'nitro' | 'tires' | 'suspension' | 'weight';
 
@@ -80,6 +80,7 @@ export const VISUAL_SLOTS: { slot: VisualSlot; label: string }[] = [
   { slot: 'exhaust', label: 'Escape' },
   { slot: 'paint', label: 'Pintura' },
   { slot: 'vinyl', label: 'Vinil' },
+  { slot: 'underglow', label: 'Néon' },
 ];
 
 export const TECH_SLOTS: { slot: TechSlot; label: string }[] = [
@@ -112,6 +113,10 @@ export const SUB_SLOTS: Partial<Record<VisualSlot, { slot: VisualSlot; label: st
   rims: [
     { slot: 'rims', label: 'Modelo' },
     { slot: 'rimColor', label: 'Cor' },
+  ],
+  underglow: [
+    { slot: 'underglow', label: 'Efeito' },
+    { slot: 'underglowColor', label: 'Cor' },
   ],
 };
 
@@ -236,6 +241,33 @@ export const RIM_COLORS: ColorOption[] = [
   { id: 'body', name: 'Cor do carro', desc: 'Pintadas como a carroçaria.', color: -1, swatch: 'linear-gradient(135deg,#888 0,#ccc 100%)' },
 ];
 
+/** Underglow effects; the ids match UNDERGLOW_STYLES in underglow.ts. */
+export const UNDERGLOW_PARTS: PartOption[] = [
+  { id: 'none', name: 'Desligado', desc: 'Sem luz por baixo.' },
+  { id: 'neon', name: 'Néon', desc: 'Tubos de néon fixos e um lago de luz na estrada.' },
+  { id: 'pulse', name: 'Pulsar', desc: 'Bate como um coração, duas pulsações de cada vez.' },
+  { id: 'chase', name: 'Cometas', desc: 'Dois cometas de luz às voltas ao carro.' },
+  { id: 'rainbow', name: 'Arco-íris', desc: 'O espectro inteiro a correr à volta do carro (ignora a cor).' },
+  { id: 'reactive', name: 'Reativo', desc: 'Acende e acelera com a velocidade, tremeluz nos drifts e fica branco no nitro.' },
+];
+
+export const UNDERGLOW_COLORS: ColorOption[] = [
+  color('cyan', 'Ciano', 0x12e6ff),
+  color('blue', 'Azul', 0x2a5bff),
+  color('purple', 'Roxo', 0x9a2bff),
+  color('magenta', 'Magenta', 0xff1fc8),
+  color('red', 'Vermelho', 0xff1830),
+  color('orange', 'Laranja', 0xff6a10),
+  color('yellow', 'Amarelo', 0xffd21a),
+  color('green', 'Verde', 0x1aff6a),
+  color('ice', 'Branco gelo', 0xdff4ff),
+  { id: 'paint', name: 'Cor do carro', desc: 'Da cor da pintura.', color: -1, swatch: 'linear-gradient(135deg,#888 0,#ccc 100%)' },
+];
+
+export function underglowColorById(id: string): ColorOption {
+  return UNDERGLOW_COLORS.find((c) => c.id === id) ?? UNDERGLOW_COLORS[0];
+}
+
 export const TECH_PARTS: Record<TechSlot, TechOption[]> = {
   engine: [
     { id: 'v6', name: 'V6 Atmosférico', desc: 'Equilibrado e linear.', mods: { topSpeed: 71, accel: 15.5, voice: 'v6' } },
@@ -285,6 +317,8 @@ export const DEFAULT_BUILD: CarBuild = {
   vinyl: 'stripes',
   vinylColor: 'auto',
   rimColor: 'auto',
+  underglow: 'none',
+  underglowColor: 'cyan',
   paintHood: 'same',
   paintRoof: 'matte',
   paintFront: 'same',
@@ -306,6 +340,8 @@ export function optionsFor(slot: Slot): PartOption[] {
   if ((PAINT_ZONE_SLOTS as string[]).includes(slot)) return [SAME_PAINT, ...PAINTS];
   if (slot === 'vinylColor') return VINYL_COLORS;
   if (slot === 'rimColor') return RIM_COLORS;
+  if (slot === 'underglow') return UNDERGLOW_PARTS;
+  if (slot === 'underglowColor') return UNDERGLOW_COLORS;
   if (slot in TECH_PARTS) return TECH_PARTS[slot as TechSlot];
   return VISUAL_PARTS[slot as GeoSlot | 'vinyl'];
 }
