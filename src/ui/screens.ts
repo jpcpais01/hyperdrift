@@ -12,6 +12,7 @@ import {
 import { computeStats, displayStats, type DisplayStats } from '../car/stats';
 import { audio } from '../core/audio';
 import type { ControlMode, Input } from '../core/input';
+import { checkAndReload, onUpdatePhase, type UpdatePhase } from '../core/updater';
 import { TILT_LOCK_DEG, TILT_SENS_LABELS, type TiltSens } from '../core/tilt';
 import type { RaceResult } from '../game/race';
 import { formatTime } from './hud';
@@ -28,6 +29,13 @@ function esc(s: string) {
 }
 
 // ---------------------------------------------------------------- main menu
+
+const UPDATE_LABELS: Record<UpdatePhase, string> = {
+  idle: 'ATUALIZAR',
+  checking: 'A PROCURAR…',
+  installing: 'A INSTALAR…',
+  reloading: 'A RECARREGAR…',
+};
 
 export class MenuScreen {
   readonly el: HTMLElement;
@@ -53,6 +61,7 @@ export class MenuScreen {
         <button class="btn-icon" data-a="sound" aria-label="Som">${muted ? 'SOM: DESLIGADO' : 'SOM: LIGADO'}</button>
         ${controlsLabel ? `<button class="btn-icon" data-a="controls">${controlsLabel}</button>` : ''}
         <button class="btn-icon" data-a="notes">PATCH NOTES</button>
+        <button class="btn-icon btn-update" data-a="update" aria-label="Atualizar o jogo"><span class="upd-ico" aria-hidden="true">↻</span><span class="upd-label">ATUALIZAR</span></button>
         <span class="keys">Teclado: ↑ acelerar · ↓ travar/marcha-atrás · ← → virar · Espaço nitro · travar a curvar = drift · C câmara</span>
       </div>
       <div class="notes hidden">
@@ -65,6 +74,12 @@ export class MenuScreen {
         </div>
       </div>`;
     root.appendChild(this.el);
+    const upd = this.el.querySelector<HTMLButtonElement>('[data-a="update"]')!;
+    onUpdatePhase((p) => {
+      upd.dataset.phase = p;
+      upd.disabled = p !== 'idle';
+      upd.querySelector('.upd-label')!.textContent = UPDATE_LABELS[p];
+    });
     this.el.addEventListener('click', (e) => {
       const b = (e.target as HTMLElement).closest('button');
       if (!b) return;
@@ -74,6 +89,7 @@ export class MenuScreen {
       if (a === 'tt') this.onTimeTrial?.();
       if (a === 'garage') this.onGarage?.();
       if (a === 'controls') this.onControls?.();
+      if (a === 'update') void checkAndReload();
       if (a === 'notes' || a === 'notes-close') this.el.querySelector('.notes')!.classList.toggle('hidden', a === 'notes-close');
       if (a === 'sound' && this.onToggleSound) {
         const m = this.onToggleSound();

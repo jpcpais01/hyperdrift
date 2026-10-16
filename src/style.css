@@ -120,6 +120,34 @@ button {
   color: var(--muted);
 }
 
+.btn-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-update .upd-ico {
+  display: inline-block;
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.4s ease;
+}
+.btn-update:hover .upd-ico {
+  transform: rotate(180deg);
+}
+.btn-update:disabled {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+.btn-update:disabled .upd-ico {
+  animation: upd-spin 0.8s linear infinite;
+}
+@keyframes upd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* ------------------------------------------------ menu */
 .screen {
   position: absolute;
@@ -975,6 +1003,9 @@ button {
   }
   .menu-foot {
     left: 24px;
+    right: 24px;
+    flex-wrap: wrap;
+    gap: 8px;
   }
 }
 

@@ -1,11 +1,11 @@
 import './style.css';
-import { registerSW } from 'virtual:pwa-register';
 import type { CarBuild } from './car/parts';
 import { audio } from './core/audio';
 import { installFirstTouch, isPortrait, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
 import { tiltSupported } from './core/tilt';
 import { Renderer } from './core/renderer';
+import { applyPendingUpdate, initUpdater } from './core/updater';
 import { CAMERA_ZOOM_LABELS, type CameraZoom } from './game/chaseCamera';
 import { Race, RaceWorld, type RaceMode } from './game/race';
 import { storage } from './storage';
@@ -177,11 +177,17 @@ class App {
     if (audio.ctx && audio.ctx.state === 'suspended') void audio.ctx.resume();
   }
 
+  /** true when reloading the page would not interrupt a race */
+  atRest() {
+    return this.state === 'menu' || this.state === 'garage';
+  }
+
   private go(state: State) {
     this.endRace();
     this.garageScene.stopPreview();
     this.state = state;
     this.menu.show(state === 'menu');
+    if (this.atRest()) applyPendingUpdate();
     this.garage.show(state === 'garage', this.build);
     this.results.show(null);
     this.pause.show(false);
@@ -251,5 +257,5 @@ class App {
   };
 }
 
-registerSW({ immediate: true });
-new App();
+const app = new App();
+initUpdater({ canReload: () => app.atRest() });
