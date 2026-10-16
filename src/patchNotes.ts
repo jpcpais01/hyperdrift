@@ -8,7 +8,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-16 18:00 UTC',
     entries: [
-      'Tilt steering on phones: open CONTROLS on the menu (or from pause) and pick Tilt to steer by turning your phone like a wheel. A live wheel preview, three sensitivity levels and one-tap calibration; mid-race, tap the tilt bar to recentre. Brake moves under your left thumb, gas stays on the right, and your choice is remembered.',
+      'Tilt steering on phones: open CONTROLOS on the menu (or Controlos in pause) and pick Inclinação to steer by turning your phone like a wheel. A live wheel preview, three sensitivity levels and one-tap calibration; mid-race, tap the tilt bar to recentre. Brake moves under your left thumb, gas stays on the right, and your choice is remembered.',
       'Realistic lighting overhaul: a deep golden-hour sky with a real sun, haze that glows warm towards the sun, a sea of clouds lit with silver linings, and sculpted floating islands. Cars cast sun shadows on PC, the road has a grainy asphalt sheen, and the sun flares when it peeks out.',
     ],
   },
