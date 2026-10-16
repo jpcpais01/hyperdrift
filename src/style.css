@@ -658,7 +658,7 @@ button {
 }
 .tc-right {
   right: calc(18px + var(--safe-r));
-  bottom: calc(120px + var(--safe-b));
+  bottom: calc(18px + var(--safe-b));
   align-items: flex-end;
 }
 .touch-controls button {
@@ -792,9 +792,6 @@ button {
   .touch-controls .tc-gas {
     width: 84px;
     height: 92px;
-  }
-  .tc-right {
-    bottom: calc(96px + var(--safe-b));
   }
   .results-card h2 {
     font-size: 24px;
