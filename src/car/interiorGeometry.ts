@@ -13,6 +13,7 @@ import {
   CylinderGeometry,
   Euler,
   ExtrudeGeometry,
+  Float32BufferAttribute,
   LatheGeometry,
   Matrix4,
   PlaneGeometry,
@@ -279,6 +280,10 @@ export interface CockpitLayout {
   handbrake: Vector3;
   mirror: Vector3;
   seatZ: number;
+  /** the seat's base: raised on a riser in tall cabins so the driver sits under their own eye */
+  seatY: number;
+  /** how tall the hydraulic handbrake may stand (1 = full) before it reaches into the view */
+  leverScale: number;
   /** shoulders for the arm rig */
   shoulderL: Vector3;
   shoulderR: Vector3;
@@ -304,7 +309,12 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
   const clusterZ = zFace - 0.03;
   const through = wheelY + 0.125;
   const clusterY = ey + ((through - ey) * (clusterZ - ez)) / (wz - ez);
-  const consoleY = f.floorY + 0.3;
+  // the hips sit ~0.6 under the eye: tall cabins (hatch, rally) raise the seat on a riser, low
+  // ones (wedge, proto) recline the driver flat on the floor
+  const seatY = Math.max(f.floorY, Math.min(f.floorY + 0.3, ey - 0.73));
+  // the console is at elbow height, never so high that its levers climb into the view
+  const consoleY = Math.max(f.floorY + 0.18, Math.min(seatY + 0.3, ey - 0.42));
+  const leverScale = Math.max(0.6, Math.min(1, (ey - 0.14 - consoleY) / 0.28));
   return {
     frame: f,
     eye,
@@ -323,6 +333,8 @@ export function cockpitLayout(bodyId: string): CockpitLayout {
     // hung from the header, just under the headliner
     mirror: new Vector3(0, f.roofAt(f.zRoofFront - 0.03) - 0.118, f.zRoofFront - 0.03),
     seatZ: ez - 0.02,
+    seatY,
+    leverScale,
     shoulderL: new Vector3(driverX + 0.2, ey - 0.25, ez - 0.07),
     shoulderR: new Vector3(driverX - 0.2, ey - 0.25, ez - 0.07),
   };
@@ -335,8 +347,15 @@ const RIM_MAX = 0.19;
 
 function seat(b: IBuckets, x: number, L: CockpitLayout, style: string) {
   const z = L.seatZ;
-  const fy = L.floorY;
+  const fy = L.seatY;
   const race = style === 'race';
+  // seat rails, and a pedestal when the seat stands up off the floor
+  const rise = fy - L.floorY;
+  for (const s of [-1, 1]) {
+    b.metal.push(put(rb(0.025, 0.02, 0.56, 0.005), [x + s * 0.15, L.floorY + 0.012, z + 0.1]));
+    if (rise > 0.03) b.dark.push(put(rb(0.04, rise, 0.4, 0.01), [x + s * 0.15, L.floorY + rise / 2 + 0.01, z + 0.1]));
+  }
+  if (rise > 0.03) b.dark.push(put(rb(0.34, 0.03, 0.36, 0.01), [x, fy + 0.01, z + 0.1]));
   const shell = race ? b.carbon : b.leather;
   const insert = race ? b.fabric : b.perf;
   // cushion
@@ -440,20 +459,36 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
     b.stitch.push(put(rb(2 * wIn - 0.08, 0.003, 0.003, 0.001), [0, t + 0.006, zf + 0.03]));
   }
   if (style === 'gt') {
-    // brushed trim strip across the passenger side, with a stitched leather roll above it
-    b.metal.push(extrudeZY([[zf + 0.02, t - 0.1, 0.006], [zf + 0.012, t - 0.135, 0.006], [zf + 0.06, t - 0.14, 0], [zf + 0.07, t - 0.1, 0]], -wIn + 0.05, 0.16, 0.008));
+    // a wood fascia across the passenger side, edged in chrome, up to the gauge binnacle
+    const fx = L.driverX - 0.205;
+    b.wood.push(extrudeZY([[zf - 0.016, t - 0.048, 0.004], [zf - 0.011, t - 0.122, 0.004], [zf + 0.03, t - 0.122, 0], [zf + 0.03, t - 0.048, 0]], -wIn + 0.04, fx, 0.004));
+    for (const y of [t - 0.046, t - 0.124]) b.chrome.push(put(rb(fx + wIn - 0.04, 0.004, 0.006, 0.0015), [(fx - wIn + 0.04) / 2, y, zf - 0.014 + (y < t - 0.1 ? 0.004 : 0)]));
+    // glovebox: a shut line in the face below the fascia and a chrome pull
+    const gn = new Vector3(0, -0.447, -0.894);
+    const gx = -L.driverX - 0.02;
+    const gAt = (dy: number) => new Vector3(gx, t - 0.12 - dy, zf + dy * 0.5).addScaledVector(gn, 0.001);
+    for (const [dy, w] of [[0.015, 0.36], [0.105, 0.36]] as const) b.dark.push(rb(w, 0.003, 0.004, 0.001).applyMatrix4(faceBasis(gn, gAt(dy))));
+    for (const sx of [-0.18, 0.18]) b.dark.push(beam(gAt(0.015).add(new Vector3(sx, 0, 0)), gAt(0.105).add(new Vector3(sx, 0, 0)), 0.003, 0.003, gn, 0.001));
+    b.chrome.push(rb(0.07, 0.01, 0.012, 0.004).applyMatrix4(faceBasis(gn, gAt(0.03).addScaledVector(gn, 0.005))));
     b.accent.push(extrudeZY([[zf + 0.004, t - 0.04, 0.002], [zf - 0.004, t - 0.044, 0.002], [zf + 0.02, t - 0.05, 0], [zf + 0.02, t - 0.04, 0]], -wIn + 0.06, wIn - 0.06, 0.003));
     // round vents at both ends and either side of the centre
-    for (const x of [-wIn + 0.13, -0.2, 0.2]) {
-      b.chrome.push(put(ring(0.042, 0.007, 28, 8), [x, t - 0.075, zf + 0.012]));
-      b.dark.push(put(new CylinderGeometry(0.04, 0.04, 0.03, 24), [x, t - 0.075, zf + 0.03], [Math.PI / 2, 0, 0]));
-      for (let i = -2; i <= 2; i++) b.metal.push(put(rb(0.074, 0.006, 0.012, 0.002), [x, t - 0.075 + i * 0.014, zf + 0.012]));
+    // the centre pair keeps clear of the gauge binnacle and, with analogue dials, of the clock
+    const room = L.driverX - 0.2;
+    const cx = Math.min(0.2, room - 0.045);
+    const vents = [-wIn + 0.13];
+    if (wIn - 0.18 >= L.driverX + 0.195) vents.push(wIn - 0.13);
+    if (cx + 0.045 <= room && cx > 0.05) vents.push(-cx, cx);
+    for (const x of vents) {
+      b.chrome.push(put(ring(0.036, 0.007, 28, 8), [x, t - 0.085, zf - 0.02]));
+      b.dark.push(put(new CylinderGeometry(0.035, 0.035, 0.03, 24), [x, t - 0.085, zf - 0.004], [Math.PI / 2, 0, 0]));
+      for (let i = -2; i <= 2; i++) b.metal.push(put(rb(0.064, 0.005, 0.01, 0.002), [x, t - 0.085 + i * 0.012, zf - 0.016]));
+      b.metal.push(put(new CylinderGeometry(0.008, 0.008, 0.01, 12), [x, t - 0.085, zf - 0.024], [Math.PI / 2, 0, 0]));
     }
   } else if (future) {
     // a light line runs under the floating wing and round the doors
     b.glow.push(extrudeZY([[zf - 0.03, t - 0.068, 0], [zf - 0.032, t - 0.075, 0], [zf + 0.02, t - 0.078, 0], [zf + 0.02, t - 0.07, 0]], -wIn + 0.04, wIn - 0.04, 0.002));
     // slot vent along the wing
-    b.dark.push(put(rb(0.62, 0.016, 0.03, 0.006), [-0.25, t - 0.035, zf - 0.035]));
+    b.dark.push(put(rb(0.46, 0.016, 0.03, 0.006), [-0.33, t - 0.035, zf - 0.035]));
   } else {
     // race: exposed fixing bolts and two round vents
     for (let i = 0; i < 8; i++) b.chrome.push(put(new CylinderGeometry(0.006, 0.006, 0.006, 8), [-wIn + 0.08 + i * ((2 * wIn - 0.16) / 7), t + 0.004, zf + 0.04]));
@@ -462,6 +497,20 @@ export function cabinBase(build: CarBuild, L: CockpitLayout): IBuckets {
       b.metal.push(put(new CylinderGeometry(0.03, 0.03, 0.02, 20), [x, t - 0.06, zf + 0.01], [Math.PI / 2, 0, 0]));
     }
   }
+  // defrost grille along the base of the windscreen and speakers at the dash-top corners
+  {
+    const top0 = new Vector3(0, t + 0.02, zf + 0.15);
+    const top1 = new Vector3(0, t - 0.02, f.zCowl + 0.03);
+    const at = (z: number) => top0.y + ((top1.y - top0.y) * (z - top0.z)) / (top1.z - top0.z);
+    const tilt = Math.atan2(top0.y - top1.y, top1.z - top0.z);
+    const zg = Math.max(zf + 0.2, f.zCowl - 0.06);
+    if (zg < f.zCowl) {
+      b.grille.push(put(rb(2 * wIn - 0.36, 0.004, 0.035, 0.0015), [0, at(zg) + 0.002, zg], [tilt, 0, 0]));
+      const zs = Math.min(zf + 0.24, zg - 0.06);
+      if (zs > zf + 0.17) for (const x of [-wIn + 0.28, wIn - 0.28]) b.grille.push(put(rb(0.12, 0.004, 0.05, 0.004), [x, at(zs) + 0.002, zs], [tilt, 0, 0]));
+    }
+  }
+
   // instrument binnacle hood (the dash part holds the display; see dashPart)
   const cl = L.cluster;
   const hoodW = 0.38;
@@ -802,14 +851,18 @@ export function dashPart(build: CarBuild, L: CockpitLayout): DashGeo {
       bezel.applyMatrix4(faceBasis(toEye, c));
       b.chrome.push(bezel);
     }
-    // a stopwatch-style clock pod on top of the dash, three chrome climate knobs on the console ramp
-    const cc = new Vector3(0, t + 0.035, zf + 0.1);
+    // a stopwatch-style clock pod, three chrome climate knobs on the console ramp
+    // the clock stands on the middle of the dash's leading edge on a moulded plinth, ahead of
+    // the dash's crown so nothing hides it, and barely above the line over the bonnet
+    const cz = zf + 0.03;
+    const cc = new Vector3(0, Math.min(t + 0.032, L.sightAt(cz) - 0.035), cz);
     const n = L.eye.clone().sub(cc).normalize();
-    const pod = new CylinderGeometry(0.058, 0.058, 0.04, 32);
+    const pod = lathe([[0.046, -0.025], [0.048, -0.012], [0.046, 0.0], [0.043, 0.004]], 36);
     pod.rotateX(Math.PI / 2);
-    b.dark.push(pod.applyMatrix4(faceBasis(n, cc.clone().addScaledVector(n, -0.02))));
-    screens.push(screenQuad(cc.clone().addScaledVector(n, 0.001), 0.1, 0.1, n, UV_CLOCK));
-    const bez = ring(0.052, 0.005, 32, 6);
+    b.dark.push(pod.applyMatrix4(faceBasis(n, cc)));
+    b.dark.push(put(rb(0.06, cc.y - t + 0.02, 0.05, 0.012), [0, (cc.y + t) / 2 - 0.015, cz + 0.03]));
+    screens.push(screenQuad(cc.clone().addScaledVector(n, 0.001), 0.075, 0.075, n, UV_CLOCK));
+    const bez = ring(0.04, 0.004, 32, 6);
     b.chrome.push(bez.applyMatrix4(faceBasis(n, cc.clone().addScaledVector(n, 0.002))));
     for (const x of [-0.07, 0, 0.07]) {
       const knob = new CylinderGeometry(0.018, 0.02, 0.022, 20);
@@ -821,11 +874,10 @@ export function dashPart(build: CarBuild, L: CockpitLayout): DashGeo {
   } else if (build.dash === 'digital') {
     // a wide floating glass panel: driver display + centre screen in one slab
     const w = 0.62;
-    // standing proud of the dash face, seen through the top of the wheel like the dials
-    const cz = zf + 0.03;
-    const e = L.eye;
-    const cy = e.y + ((cl.y - e.y) * (cz - e.z)) / (cl.z - e.z);
-    const c = new Vector3(L.driverX - 0.16, Math.min(cy + 0.01, L.sightAt(cz) - 0.07), cz);
+    // floating just in front of the dash face, exactly where the dials would be, so it is
+    // seen through the top of the wheel and its top edge stays under the line over the bonnet
+    const cz = cl.z - 0.005;
+    const c = new Vector3(L.driverX - 0.16, Math.min(cl.y + 0.005, L.sightAt(cz) - 0.075), cz);
     const n = L.eye.clone().sub(new Vector3(L.driverX, c.y, c.z)).normalize();
     n.x *= 0.3;
     n.normalize();
@@ -1039,17 +1091,21 @@ export function shifterPart(id: string): LeverGeo {
   return { base, lever, grip: new Vector3(0, 0.14, 0), gripAxis: new Vector3(0, 1, 0) };
 }
 
-export function handbrakePart(id: string): LeverGeo {
+/** `scale` shortens the tall hydraulic lever in low cabins, where it would reach into the view. */
+export function handbrakePart(id: string, scale = 1): LeverGeo {
   const base = emptyI();
   const lever = emptyI();
   if (id === 'hydro') {
     // tall vertical drift handbrake on a machined bracket
+    const k = scale;
     base.metal.push(put(rb(0.05, 0.06, 0.12, 0.008), [0, 0.03, 0]));
     base.red.push(put(new CylinderGeometry(0.014, 0.014, 0.07, 14), [0, 0.06, -0.06], [Math.PI / 2, 0, 0]));
-    lever.metal.push(rod([0, 0, 0], [0, 0.24, 0.02], 0.009, 10));
-    lever.dark.push(put(new CylinderGeometry(0.017, 0.017, 0.11, 16), [0, 0.215, 0.018]));
-    lever.accent.push(put(new CylinderGeometry(0.018, 0.018, 0.012, 16), [0, 0.27, 0.02]));
-    return { base, lever, grip: new Vector3(0, 0.21, 0.018), gripAxis: new Vector3(0, 1, 0.08).normalize() };
+    for (const [x, z] of [[-0.018, -0.045], [0.018, -0.045], [-0.018, 0.045], [0.018, 0.045]]) base.chrome.push(put(new CylinderGeometry(0.005, 0.005, 0.006, 8), [x, 0.062, z]));
+    lever.metal.push(rod([0, 0, 0], [0, 0.24 * k, 0.02], 0.009, 10));
+    lever.dark.push(put(new CylinderGeometry(0.017, 0.017, 0.11, 16), [0, 0.24 * k - 0.025, 0.018]));
+    for (let i = 0; i < 5; i++) lever.dark.push(put(ring(0.0178, 0.0018, 16, 4), [0, 0.24 * k - 0.07 + i * 0.022, 0.018], [Math.PI / 2, 0, 0]));
+    lever.accent.push(put(new CylinderGeometry(0.018, 0.018, 0.012, 16), [0, 0.24 * k + 0.03, 0.02]));
+    return { base, lever, grip: new Vector3(0, 0.24 * k - 0.03, 0.018), gripAxis: new Vector3(0, 1, 0.08).normalize() };
   }
   if (id === 'button') {
     base.dark.push(put(rb(0.06, 0.012, 0.08, 0.008), [0, 0.006, 0]));
@@ -1185,4 +1241,46 @@ export function sleeve(len: number, r0: number, r1: number): BufferGeometry {
 export function cockpitBucketsFor(build: CarBuild) {
   const L = cockpitLayout(build.body);
   return { L, base: cabinBase(build, L), dash: dashPart(build, L) };
+}
+
+// ---------------------------------------------------------------- windscreen
+
+/**
+ * The inside face of the windscreen, from the cowl up to the roof: a curved strip just inside
+ * the glass line of the body. `uv.y` runs 0 at the cowl to 1 at the header (the sun strip).
+ */
+export function windscreenGeometry(L: CockpitLayout): BufferGeometry {
+  const f = L.frame;
+  const rows = 14;
+  const cols = 16;
+  const pos: number[] = [];
+  const uv: number[] = [];
+  const idx: number[] = [];
+  for (let j = 0; j <= rows; j++) {
+    const v = j / rows;
+    const z = f.zCowl - 0.02 + (f.zRoofFront + 0.01 - (f.zCowl - 0.02)) * v;
+    const y = Math.max(L.cowlY, f.roofAt(z)) - 0.012;
+    const hw = f.halfW + (f.roofW - f.halfW) * v - 0.02;
+    for (let i = 0; i <= cols; i++) {
+      const u = i / cols;
+      const x = (u * 2 - 1) * hw;
+      // a gentle wrap: the glass curves back towards the pillars
+      const wrap = (x / hw) ** 2 * 0.05 * (1 - v * 0.5);
+      pos.push(x, y - wrap * 0.3, z - wrap);
+      uv.push(u, v);
+    }
+  }
+  for (let j = 0; j < rows; j++) {
+    for (let i = 0; i < cols; i++) {
+      const a = j * (cols + 1) + i;
+      const b = a + cols + 1;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  const g = new BufferGeometry();
+  g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
 }
