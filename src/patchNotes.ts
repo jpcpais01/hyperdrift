@@ -6,6 +6,12 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-17 23:00 UTC',
+    entries: [
+      "Hyper Cunha and Protótipo windscreens now flow down into the hood: the glass no longer stands on the low hood like a wall with a gap under it, and the dark wheel-well patches that showed through the hood are gone. Every hood option fits cleanly on every body.",
+    ],
+  },
+  {
     hour: '2026-10-17 22:00 UTC',
     entries: [
       'New sound mixer: volume bars for Master, Engines, Effects and Interface in Settings and in the pause menu (under "Som"). Drag or tap the bars, or push left and right with keys or a gamepad, and hear each one change as you go. Your mix is saved.',

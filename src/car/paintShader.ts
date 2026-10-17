@@ -39,7 +39,10 @@ int shellZone(vec3 p, vec3 n) {
   // inside the wheel arches: the well walls and the arch's inner return
   float rf = length(vec2(p.y - uArchF.x, p.z - uArchF.y)) - (uArchF.z - 0.004);
   float rr = length(vec2(p.y - uArchR.x, p.z - uArchR.y)) - (uArchR.z - 0.004);
-  if (min(rf, rr) < 0.0 && abs(p.x) > uArchF.w - 0.2) return 7;
+  // a hood or deck sunk below the arch tops passes through the circle too: skin that faces
+  // up or in towards the centre line is body, not well (the well walls face the wheel)
+  bool top = n.y > 0.45 || n.x * sign(p.x) < -0.2;
+  if (min(rf, rr) < 0.0 && abs(p.x) > uArchF.w - 0.2 && !top) return 7;
   if (p.z > uHood.x && p.z < uHood.y && abs(p.x) < uHood.z && p.y > uHood.w && n.y > 0.0) return 3;
   if (p.z > uEnds.x) return 1;
   if (p.z < uEnds.y) return 2;

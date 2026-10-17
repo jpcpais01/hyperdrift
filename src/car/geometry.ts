@@ -20,7 +20,7 @@ import {
 } from 'three';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { bodySections, frontSections, rearSections, type BodyInfo, type BodySculpt } from './bodies';
+import { bodySections, frontSections, rearSections, type BodyInfo, type BodySculpt, type CabinKey } from './bodies';
 import { above, conform, conformBand, conformStrip, ellipse, face, flank, planar, roundRect, soften, wrap, type Projector } from './conform';
 import { loft, profileCurve, refine, sectionAt, type Section } from './loft';
 import { TRAVEL, type Axle, type Skeleton } from './skeleton';
@@ -317,7 +317,7 @@ export function skinY(sec: Section, x: number): number {
 }
 
 /** Flares the fenders, sculpts the doors and pushes the wheel wells in. Returns per-vertex paint zones (the shader darkens the wells itself). */
-function sculpt(g: BufferGeometry, K: Skeleton, sc: BodySculpt, cut = true): Float32Array {
+function sculpt(g: BufferGeometry, K: Skeleton, sc: BodySculpt, fine: Section[], cut = true): Float32Array {
   const pos = g.getAttribute('position') as BufferAttribute;
   const zone = new Float32Array(pos.count).fill(ZONE.auto);
   for (let i = 0; i < pos.count; i++) {
@@ -328,7 +328,10 @@ function sculpt(g: BufferGeometry, K: Skeleton, sc: BodySculpt, cut = true): Flo
     let ax = Math.abs(x);
     ax += flare(K, sc, ax, y, z) - scallop(K, sc, ax, y, z);
     const { r, a } = archPolar(K, y, z);
-    if (cut && ax > K.wellX && r < a.arch) {
+    // a hood sunk between the wings can dip below the arch top: skin above the shoulder and
+    // inboard of the tyre stays hood instead of folding into a strip of well wall that shows from above
+    const hood = y > sectionAt(fine, z).ys && ax < a.x - a.width / 2;
+    if (cut && ax > K.wellX && r < a.arch && !hood) {
       if (r > a.arch - EDGE_BAND && y > a.r - 0.2) {
         // the vertices nearest the cut are pulled onto the arch circle, so the opening is a clean round edge
         const k = a.arch / Math.max(1e-4, r);
@@ -399,11 +402,11 @@ export function shellPart(bodyId: string, frontId: string, rearId: string, dome 
   const g = loft(fine, { capStart: true, capEnd: true, ring: 46 });
   if (dome) powerDome(g, body.cabin[0].z + 0.1, nose.at(-1)!.z - 0.4);
   const uncut = g.clone();
-  g.setAttribute('zone', new BufferAttribute(sculpt(g, K, sc), 1));
+  g.setAttribute('zone', new BufferAttribute(sculpt(g, K, sc, fine), 1));
   g.computeVertexNormals();
   // the arch cut folds triangles around the opening; take the skin's normals
   // from an uncut copy so the paint around every arch shades smoothly
-  sculpt(uncut, K, sc, false);
+  sculpt(uncut, K, sc, fine, false);
   uncut.computeVertexNormals();
   {
     const p = g.getAttribute('position');
@@ -671,28 +674,31 @@ function cabinPatch(fine: Section[], t0: number, t1: number, z0: number, z1: num
   return g;
 }
 
+/**
+ * One glasshouse section over the skin section under it: the belt sits just
+ * above the skin and the base is buried in the body. The windscreen's foot
+ * (the front key) lies on the skin itself, following the hood's valley
+ * between the wings, so a low or sunken hood never leaves the glass standing
+ * on it like a wall.
+ */
+function glassSection(k: CabinKey, under: Section, front: boolean, crisp: number): Section {
+  const belt = skinY(under, k.beltW) + 0.03;
+  const centre = under.yc ?? under.yt;
+  if (front) {
+    const yc = centre + 0.012;
+    return { z: k.z, yb: Math.min(centre, belt) - 0.06, wb: k.beltW - 0.05, ys: belt, ws: k.beltW, yt: Math.max(yc, Math.min(belt, skinY(under, k.roofW) + 0.02)), wt: k.roofW, yc, crisp };
+  }
+  return { z: k.z, yb: Math.min(centre, belt) - 0.06, wb: k.beltW - 0.05, ys: belt, ws: k.beltW, yt: Math.max(k.roof, belt + 0.01), wt: k.roofW, crisp };
+}
+
 export function cabinPart(id: string, shell: ShellInfo): PartGeo {
   const geo = emptyPart();
   const keys = shell.body.cabin;
   // the glasshouse grows out of the body: its belt sits just above the skin
   // under it and its base is buried in the body, whatever the body's shape
   const secs: Section[] = keys
-    .slice()
-    .reverse()
-    .map((k) => {
-      const under = sectionAt(shell.fine, k.z);
-      const belt = skinY(under, k.beltW) + 0.03;
-      return {
-        z: k.z,
-        yb: Math.min(under.yc ?? under.yt, belt) - 0.06,
-        wb: k.beltW - 0.05,
-        ys: belt,
-        ws: k.beltW,
-        yt: Math.max(k.roof, belt + 0.01),
-        wt: k.roofW,
-        crisp: shell.body.cabinCrisp,
-      };
-    });
+    .map((k, i) => glassSection(k, sectionAt(shell.fine, k.z), i === 0, shell.body.cabinCrisp))
+    .reverse();
   void id;
   const fine = refine(secs, 8);
   geo.glass.push(loft(fine, { capStart: true, capEnd: true, ring: 32 }));
@@ -2136,7 +2142,9 @@ export function cabinFrame(bodyId: string): CabinFrame {
 function cabinFrameOf(body: BodyInfo): CabinFrame {
   const keys = body.cabin;
   // same glasshouse as cabinPart: the belt sits just above the body's skin (the cabin
-  // only spans the body's own sections, so the nose and tail don't matter here)
+  // only spans the body's own sections, so the nose and tail don't matter here). The
+  // cockpit is its own scene with its own windscreen, so it keeps the cowl at the belt
+  // where the exterior glass dips its foot into a sunken hood.
   const hull = refine([body.rearJoint, ...body.hull, body.frontJoint], (len) => len / 0.032);
   const belts = keys.map((k) => skinY(sectionAt(hull, k.z), k.beltW) + 0.03);
   const secs: Section[] = keys
