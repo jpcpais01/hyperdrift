@@ -88,6 +88,8 @@ export class Hud {
     clock: HTMLElement;
   };
   private boardKey = '';
+  private dmgKey = '';
+  private dmgEl!: HTMLElement;
   private shownBest = -1;
   private shownTotal = -1;
   private bankTimer = 0;
@@ -108,6 +110,16 @@ export class Hud {
       <button class="hud-cam" aria-label="Câmara (C)" title="Câmara (C)"><svg class="cam-ico" viewBox="0 0 24 24"><path d="M3 8.5h12v9H3zM15 11.5l6-3.5v10l-6-3.5"/></svg><svg class="wheel-ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.2"/><path d="M3.6 11.2h6.2M14.2 11.2h6.2M12 14.2v6.2"/></svg><span class="hud-cam-dots"><i></i><i></i><i></i></span></button>
       <button class="hud-pause" aria-label="Pausa"><svg viewBox="0 0 24 24"><path d="M8 5v14M16 5v14"/></svg></button>
       <div class="hud-br">
+        <div class="hud-dmg" aria-label="Estado do carro">
+          <svg viewBox="0 0 40 64">
+            <path class="z0" d="M8 15V9q0-7 12-7t12 7v6z"/>
+            <path class="z1" d="M8 49h24v6q0 7-12 7T8 55z"/>
+            <path class="z2" d="M4 17h6v30H4q-1.4-15 0-30z"/>
+            <path class="z3" d="M30 17h6q1.4 15 0 30h-6z"/>
+            <rect class="z4" x="12" y="20" width="16" height="24" rx="3"/>
+          </svg>
+          <b>100%</b>
+        </div>
         <div class="hud-speed"><span class="v">0</span><small>km/h</small></div>
         <div class="hud-gear">1</div>
         <div class="hud-bars">
@@ -167,11 +179,33 @@ export class Hud {
       board: q('.hz-board'),
       clock: q('.hz-clock'),
     };
+    this.dmgEl = q('.hud-dmg');
     this.camBtn = q('.hud-cam');
     this.camBtn.addEventListener('click', () => {
       this.onCamera?.();
       this.camBtn.blur();
     });
+  }
+
+  /**
+   * The car's state: a top view lit per zone (front, rear, the two sides,
+   * the roof) from clean to red, and what is left of it in percent. Hidden
+   * while the car is untouched. Cheap to call every frame.
+   */
+  setDamage(d: { health: number; zone: ArrayLike<number>; totaled: boolean; mode: string } | null | undefined) {
+    const show = !!d && d.mode !== 'off' && (d.health < 0.999 || Array.prototype.some.call(d.zone, (z: number) => z > 0.02));
+    const key = show ? `${Math.round(d!.health * 100)}|${Array.from(d!.zone, (z) => Math.round(Math.min(1, z) * 20)).join(',')}|${d!.totaled}` : '';
+    if (key === this.dmgKey) return;
+    this.dmgKey = key;
+    this.dmgEl.classList.toggle('on', show);
+    if (!show || !d) return;
+    this.dmgEl.classList.toggle('dead', d.totaled);
+    for (let i = 0; i < 5; i++) {
+      const z = Math.min(1, d.zone[i]);
+      const el = this.dmgEl.querySelector<SVGElement>(`.z${i}`)!;
+      el.style.fill = z < 0.03 ? 'rgba(255,255,255,0.22)' : `hsl(${Math.round(52 - 52 * z)} 95% ${Math.round(60 - 8 * z)}%)`;
+    }
+    this.dmgEl.querySelector('b')!.textContent = d.totaled ? 'K.O.' : `${Math.round(d.health * 100)}%`;
   }
 
   /** Lights one dot per zoom step: near = 1, medium = 2, far = 3; the cockpit shows a steering wheel. */

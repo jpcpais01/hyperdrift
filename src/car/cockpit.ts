@@ -46,6 +46,7 @@ import {
 } from 'three';
 import { SUN_DIR } from '../world/atmosphere';
 import { mergeAll } from './carBuilder';
+import { createDamageUniforms, DAMAGE_FRAG, type DamageUniforms } from './damageShader';
 import { DashDisplay, type DashStyle } from './dashDisplay';
 import { armGeometry, handFrame, handGeometry, mirrorMorphX, MORPH_KNOB, MORPH_OPEN, solveArm, UPPER } from './driverRig';
 import {
@@ -270,7 +271,11 @@ const WINDSCREEN_VERT = /* glsl */ `
 varying vec3 vW;
 varying vec3 vN;
 varying vec2 vUv;
+varying vec3 vDmgPos;
+varying vec3 vDmgN;
 void main() {
+  vDmgPos = position;
+  vDmgN = normal;
   vec4 w = modelMatrix * vec4(position, 1.0);
   vW = w.xyz;
   vN = normalize(mat3(modelMatrix) * normal);
@@ -280,6 +285,7 @@ void main() {
 `;
 
 const WINDSCREEN_FRAG = /* glsl */ `
+${DAMAGE_FRAG}
 uniform vec3 uSun;
 uniform vec3 uTint;
 varying vec3 vW;
@@ -301,6 +307,19 @@ void main() {
   vec3 c = mix(uTint, sky, clamp(fres * 2.5, 0.0, 1.0));
   c = mix(c, vec3(0.02), clamp(frit, 0.0, 1.0));
   c += glint;
+  // the car's crash cracks, seen from inside: a white spider web where the glass took a hit
+  if (uDentN > 0 || uWreck.y > 0.0) {
+    vec4 dm = dmgAt(vDmgPos);
+    float crack = 0.0;
+    if (dm.w >= 0.0) {
+      int k = int(dm.w + 0.5);
+      crack = dmgCracks(vDmgPos, uDentA[k].xyz, uDentA[k].w * 1.2, uDentC[k].y) * smoothstep(0.03, 0.14, uDentB[k].w);
+    }
+    float craze = smoothstep(0.8, 1.0, uWreck.y);
+    if (craze > 0.0) crack = max(crack, dmgCraze(vDmgPos * 0.8) * craze);
+    c = mix(c, vec3(0.78, 0.82, 0.85) + glint * 0.3, crack * 0.85);
+    a = max(a, crack * 0.8);
+  }
   gl_FragColor = vec4(c, clamp(a + glint * 0.5, 0.0, 0.95));
   #include <colorspace_fragment>
 }
@@ -370,6 +389,9 @@ export class Cockpit {
   /** driver's eye in car space */
   readonly eye: Vector3;
   private uniforms: ShadeUniforms;
+  /** the windscreen reads the car's damage (cracks), once the race hands it over */
+  private screenDamage: DamageUniforms = createDamageUniforms();
+  private wsMat: ShaderMaterial | null = null;
   private mats: Material[] = [];
   private geos: BufferGeometry[] = [];
   private bucketMat: Record<IBucket, Material>;
@@ -515,7 +537,7 @@ export class Cockpit {
       this.geo(windscreenGeometry(L)),
       this.own(
         new ShaderMaterial({
-          uniforms: { uSun: { value: SUN_DIR }, uTint: { value: new Color(style === 'future' ? 0x1a2a3a : 0x14263a) } },
+          uniforms: { uSun: { value: SUN_DIR }, uTint: { value: new Color(style === 'future' ? 0x1a2a3a : 0x14263a) }, ...this.screenDamage },
           vertexShader: WINDSCREEN_VERT,
           fragmentShader: WINDSCREEN_FRAG,
           transparent: true,
@@ -525,6 +547,7 @@ export class Cockpit {
       ),
     );
     ws.renderOrder = 2;
+    this.wsMat = ws.material as ShaderMaterial;
     this.root.add(ws);
 
     // --- steering wheel on its column
@@ -696,6 +719,12 @@ export class Cockpit {
   }
 
   /** Puts the cockpit where the car body is (call after the body has moved). */
+  /** Crack the windscreen with this car's damage (the same dents the outside glass shows). */
+  setDamage(u: DamageUniforms) {
+    if (!this.wsMat) return;
+    for (const k of Object.keys(u) as (keyof DamageUniforms)[]) this.wsMat.uniforms[k] = u[k];
+  }
+
   follow(body: Object3D) {
     body.updateWorldMatrix(true, false);
     this.root.matrix.copy(body.matrixWorld);

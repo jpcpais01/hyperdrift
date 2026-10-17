@@ -75,6 +75,7 @@ const ICON_NOTES = `<svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d
 const ICON_SOUND = `<svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4z"/><path class="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>`;
 const ICON_PAD = `<svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="11" rx="5.5"/><path d="M7 10.5v4M5 12.5h4"/><circle cx="16" cy="11.5" r=".9"/><circle cx="18" cy="13.5" r=".9"/></svg>`;
 const ICON_RES = `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 9h3M7 9v3M17 13h-3M17 13v-3"/></svg>`;
+const ICON_CRASH = `<svg viewBox="0 0 24 24"><path d="M3 15.5l2.2-5.2c.4-.9 1.2-1.5 2.2-1.5h4.2l2.6 2.9 3.2.6c1 .2 1.6 1 1.6 2v1.2H3z"/><circle cx="7" cy="16.5" r="1.8"/><circle cx="16.5" cy="16.5" r="1.8"/><path d="M15 3.5l.8 2.6 2.4-1.3-.9 2.6 2.7.4-2.3 1.4"/></svg>`;
 const ICON_UPDATE = `<svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v5h-5"/></svg>`;
 const ICON_PLAY = `<svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>`;
 const ICON_RESTART = `<svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 4v5h5"/></svg>`;
@@ -141,7 +142,10 @@ export class MenuScreen {
   private stats: DisplayStats | null = null;
   private bestDrift = 0;
 
-  constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null, resolutionLabel: string) {
+  /** Cycles the damage setting and returns the new label. */
+  onDamage: (() => string) | null = null;
+
+  constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null, resolutionLabel: string, damageLabel = 'DANOS: REALISTAS') {
     this.el = h('div', 'screen menu hidden');
     const last = store(LAST_MODE) as MenuMode | null;
     if (last && MODES.some((m) => m.id === last)) this.sel = last;
@@ -190,6 +194,10 @@ export class MenuScreen {
             <button class="set-row" data-a="res">
               <span class="set-ico">${ICON_RES}</span><span class="set-txt"><b>Resolução</b><small>Auto ajusta para manter a fluidez</small></span>
               <span class="set-cycle"><i>‹</i><span class="set-val" data-v="res">${valueOf(resolutionLabel)}</span><i>›</i></span>
+            </button>
+            <button class="set-row" data-a="damage">
+              <span class="set-ico">${ICON_CRASH}</span><span class="set-txt"><b>Danos</b><small>Amolgadelas, peças a voar e carros desfeitos</small></span>
+              <span class="set-cycle"><i>‹</i><span class="set-val" data-v="damage">${valueOf(damageLabel)}</span><i>›</i></span>
             </button>
             <button class="set-row btn-update" data-a="update">
               <span class="set-ico upd-ico">${ICON_UPDATE}</span><span class="set-txt"><b>Atualizar o jogo</b><small>Instala a versão mais recente</small></span>
@@ -261,6 +269,7 @@ export class MenuScreen {
       if (a === 'go') this.launch(this.sel);
       if (a === 'controls') this.onControls?.();
       if (a === 'res' && this.onResolution) this.setResolutionLabel(this.onResolution());
+      if (a === 'damage' && this.onDamage) this.el.querySelector('[data-v="damage"]')!.textContent = valueOf(this.onDamage());
       if (a === 'update') void checkAndReload();
       if (a === 'settings') this.sheet('settings');
       if (a === 'notes') {

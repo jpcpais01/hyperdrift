@@ -24,6 +24,8 @@ import type { Renderer } from '../core/renderer';
 import { collideCars, type CarContact } from '../game/carCollision';
 import { emitContactFx, emitDriveFx, emitNitroFx, emitPopFx, emitWallFx, poseCar } from '../game/carFx';
 import { CarPhysics, type DriveInput } from '../game/carPhysics';
+import { CrashSystem, DMG_TAG, netDamageDue, sagBody } from '../game/crash';
+import type { CarDamage, ImpactResult } from '../car/damage';
 import { ChaseCamera, type CameraZoom } from '../game/chaseCamera';
 import { applyCar, packCar, unpackCar, type CarSnapshot } from '../net/carState';
 import { HOST_ID } from '../net/protocol';
@@ -143,6 +145,9 @@ interface ZoneCar {
   live: number;
   liveMult: number;
   total: number;
+  damage?: CarDamage;
+  netDmgRev: number;
+  netDmgRepeat: number;
 }
 
 /** What the host's "go" carries for a zone session. */
@@ -214,6 +219,9 @@ export class FreeRoam {
   inputLocked = false;
   /** called whenever the best drift improves (to save it) */
   onBest: ((best: number) => void) | null = null;
+  /** dents, flying parts, smoke and wrecks */
+  readonly crash: CrashSystem;
+  private sendCount = 0;
 
   constructor(
     private world: ZoneWorld,
@@ -226,6 +234,23 @@ export class FreeRoam {
     const L = world.layout;
     this.score = new DriftScore(bestDrift);
     world.particles.clear();
+    // debris bounces on the island's ground
+    this.crash = new CrashSystem(
+      world.scene,
+      world.particles,
+      (p, _hint, up) => {
+        L.normalAt(p.x, p.z, up);
+        return (p.y - L.heightAt(p.x, p.z)) * up.y;
+      },
+      {
+        playerHit: (r) => this.onPlayerCrash(r),
+        // out here a wreck is put back on its wheels where it stopped
+        recover: (c) => {
+          c.physics.place(c.physics.pos.clone(), c.physics.fwd.clone());
+          if (c.isPlayer) this.hud.message('REPARADO', 1.3);
+        },
+      },
+    );
 
     const plaza = samplePath(stadiumPoint, 2);
     const rim = samplePath(circlePath(231), 2.5);
@@ -258,6 +283,7 @@ export class FreeRoam {
     this.player.physics.nitro = 0.6;
 
     this.cockpit = new Cockpit(playerBuild, isTouch(), world.sky.envMap);
+    if (this.player.visual.damage) this.cockpit.setDamage(this.player.visual.damage.uniforms);
     this.startAudio();
     hud.setZoneMap(L);
     hud.show(true, 'zone');
@@ -281,7 +307,7 @@ export class FreeRoam {
     const stats = computeStats(build);
     const physics = new CarPhysics(null, stats, seed + 1);
     physics.ground = this.world.layout;
-    const visual = buildCar(build);
+    const visual = buildCar(build, { damage: true });
     physics.hitbox = visual.hitbox;
     this.world.sky.castShadows(visual.root);
     this.world.scene.add(visual.root);
@@ -308,8 +334,11 @@ export class FreeRoam {
       live: 0,
       liveMult: 1,
       total: 0,
+      netDmgRev: -1,
+      netDmgRepeat: 0,
     };
     this.cars.push(car);
+    this.crash.add(car, seed + 7);
     return car;
   }
 
@@ -359,6 +388,7 @@ export class FreeRoam {
 
   private dropCar(c: ZoneCar) {
     c.gone = true;
+    this.crash.remove(c);
     this.world.scene.remove(c.visual.root);
     c.visual.dispose();
     c.tag?.remove();
@@ -387,8 +417,10 @@ export class FreeRoam {
     const seenQuat = TQ.copy(c.netQuat).multiply(p.quat);
     applyCar(p, s, 0);
     c.lastInput = s.input;
-    // the score rides along after the car
+    // the score rides along after the car, then its damage
     const a = d as number[];
+    const at = a.indexOf(DMG_TAG, 27);
+    if (at > 0) this.crash.apply(c, a, at + 1);
     c.live = Math.max(0, Number(a[27]) || 0);
     c.liveMult = Math.max(1, Math.min(9, Number(a[28]) || 1));
     c.total = Math.max(0, Number(a[29]) || 0);
@@ -498,6 +530,8 @@ export class FreeRoam {
     let n = 0;
     for (const c of this.cars) {
       if (n >= 12 || (c.remote && !c.visual.root.visible)) continue;
+      // both headlamps smashed: no beam
+      if (c.damage?.lightsOut[0] && c.damage.lightsOut[1]) continue;
       const d = c.physics.draw;
       const front = TMP.copy(d.pos).addScaledVector(d.fwd, 2.0);
       const gy = L.heightAt(front.x, front.z);
@@ -523,6 +557,7 @@ export class FreeRoam {
     this.sendTimer -= dt;
     if (this.sendTimer > 0) return;
     this.sendTimer = 0.05;
+    this.sendCount++;
     const rt = room.hostNow() / 1000;
     for (const c of this.cars) {
       if (c.remote || c.gone) continue;
@@ -530,6 +565,8 @@ export class FreeRoam {
       if (c.isPlayer && this.spectate) continue;
       const d = packCar(c.physics, c.lastInput, { rt, lap: 0, finished: false, finishTime: 0, bestLap: null });
       if (c.isPlayer) d.push(this.score.active ? this.score.score : 0, this.score.mult, this.score.total);
+      else d.push(0, 1, 0);
+      if (c.damage && netDamageDue(c, this.sendCount)) d.push(DMG_TAG, ...c.damage.pack());
       room.sendState(c.id, d);
     }
   }
@@ -670,6 +707,7 @@ export class FreeRoam {
 
     this.fxTime += dt;
     this.pose(dt);
+    this.crash.update(dt, this.cars, camera.position);
     this.world.particles.update(dt);
 
     // camera
@@ -699,6 +737,7 @@ export class FreeRoam {
       this.boardTimer = 0.5;
       this.updateBoard();
     }
+    this.hud.setDamage(this.player.damage);
     this.hud.updateZone(
       {
         speedKmh: p.speed * 3.6,
@@ -820,6 +859,8 @@ export class FreeRoam {
     const p = c.physics;
     const parts = this.world.particles;
     for (const e of p.events) {
+      if (e.type === 'impact' || e.type === 'respawn') this.crash.event(c, e);
+      if (e.type === 'impact') continue;
       if (e.type === 'pop') {
         c.visual.exhaust?.pop(e.strength);
         if (c.voice) audio.pop(c.voice, e.strength);
@@ -865,8 +906,16 @@ export class FreeRoam {
     p.events.length = 0;
   }
 
+  /** The player's car took a hit: the camera, the phone and the HUD feel it. */
+  private onPlayerCrash(r: ImpactResult) {
+    this.chase.addShake(0.15 + r.severity * 1.3);
+    if (r.severity > 0.12 && isTouch()) navigator.vibrate?.(r.totaled ? [60, 40, 140] : Math.round(20 + r.severity * 60));
+    if (r.totaled) this.hud.message('DESTRUÍDO!', 2.4, 'big');
+  }
+
   private collide() {
     const contacts = collideCars(this.activeList, this.contacts);
+    this.crash.contacts(contacts, (p) => this.cars.find((c) => c.physics === p));
     const pl = this.player.physics;
     for (const ct of contacts) {
       emitContactFx(this.world.particles, ct);
@@ -917,6 +966,7 @@ export class FreeRoam {
     const ease = 1 - Math.exp(-9 * dt);
     this.cars.forEach((c, i) => {
       poseCar(c.physics, c.visual, c.lastInput.brake, dt, this.fxTime + i * 3.1);
+      sagBody(c);
       if (!c.remote) return;
       c.netOffset.multiplyScalar(1 - ease);
       c.netQuat.slerp(IDENTITY, ease);
@@ -933,6 +983,7 @@ export class FreeRoam {
       if (room.onEvent) room.onEvent = null;
     }
     this.tags?.remove();
+    this.crash.dispose();
     this.hud.setZoneBoard(null);
     this.cockpit.dispose();
     this.world.beams.visible = false;

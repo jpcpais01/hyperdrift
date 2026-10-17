@@ -56,7 +56,9 @@ export type CarEvent =
   | { type: 'nitroEnd' }
   | { type: 'pop'; strength: number }
   | { type: 'shift'; up: boolean }
-  | { type: 'respawn' };
+  | { type: 'respawn' }
+  /** the body hit something: `point` and `dir` (into the car) in car space, `speed` m/s into it, `scrape` along it */
+  | { type: 'impact'; point: Vector3; dir: Vector3; speed: number; scrape: number };
 
 /**
  * Arcade car physics. The car lives in "track space": every step it is
@@ -136,6 +138,10 @@ export class CarPhysics {
   private heaveVel = 0;
 
   slip = 0;
+  /** what damage leaves of the car (set by the damage model each frame) */
+  readonly dmg = { power: 1, top: 1, grip: 1, pull: 0, dead: false };
+  /** seconds of grinding along a wall left before the next scrape event */
+  private grindTimer = 0;
   /** speed into the last obstacle hit (free roam), cleared by the caller */
   impact = 0;
   /** free-roam spawn slot used when the car respawns */
@@ -298,7 +304,7 @@ export class CarPhysics {
     if (this.boostTime > 0) this.boostTime -= dt;
 
     // nitro: hold to burn the tank; the nitro part sets how hard and how long it pushes
-    const wantNitro = (input.nitro ?? 0) > 0.5;
+    const wantNitro = (input.nitro ?? 0) > 0.5 && !this.dmg.dead;
     if (this.nitroActive) {
       this.nitro -= dt / (2.6 * st.boostDuration);
       if (!wantNitro || this.nitro <= 0) {
@@ -338,7 +344,8 @@ export class CarPhysics {
       // --- steering & drift
       let vf = this.vel.dot(this.fwd);
       const spd = Math.abs(vf);
-      const steer = input.steer;
+      // bent front wheels pull the car to one side
+      const steer = clamp(input.steer + this.dmg.pull * Math.min(1, spd / 15), -1, 1);
       const brakeTap = input.brake > 0 && this.prevBrake <= 0;
       if (!this.drifting) {
         const fast = spd > st.topSpeed * st.driftThreshold && input.throttle > 0;
@@ -375,14 +382,15 @@ export class CarPhysics {
       // --- longitudinal
       vf = this.vel.dot(dFwd);
       let vr = this.vel.dot(dRight);
-      const top = st.topSpeed * (boosting ? 1 + 0.28 * thrust : 1);
-      if (input.throttle > 0) {
-        const t = Math.max(0, Math.min(1.2, vf / st.topSpeed));
+      const dm = this.dmg;
+      const top = st.topSpeed * dm.top * (boosting ? 1 + 0.28 * thrust : 1);
+      if (input.throttle > 0 && !dm.dead) {
+        const t = Math.max(0, Math.min(1.2, vf / (st.topSpeed * dm.top)));
         let a = st.accel * Math.max(0, 1 - Math.pow(t, 2.2));
         a += st.turboLow * Math.max(0, 1 - t * 1.4);
         a += st.turboHigh * smoothstep(0.3, 0.75, t) * Math.max(0, 1 - Math.pow(t, 4));
         if (vf < 0) a += 20;
-        vf += a * input.throttle * dt;
+        vf += a * dm.power * input.throttle * dt;
       }
       if (input.brake > 0) {
         if (vf > 1) {
@@ -399,7 +407,9 @@ export class CarPhysics {
       if (vf > top) vf -= (vf - top) * 2.2 * dt;
 
       // --- lateral grip
-      const grip = this.drifting ? st.driftGrip : st.grip;
+      // a wreck slides to a stop on whatever is left of its wheels
+      const grip = (this.drifting ? st.driftGrip : st.grip) * this.dmg.grip * (this.dmg.dead ? 0.35 : 1);
+      if (this.dmg.dead) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 7 * dt);
       const vrNew = vr * Math.exp(-grip * dt);
       if (this.drifting) vf += Math.abs(vr - vrNew) * 0.4;
       vr = vrNew;
@@ -416,6 +426,25 @@ export class CarPhysics {
         const side = Math.sign(q.lateral);
         this.pos.addScaledVector(q.right, -side * (Math.abs(q.lateral) - limit));
         const vn = this.vel.dot(q.right) * side;
+        this.grindTimer -= dt;
+        if (vn > 3 || (this.grindTimer <= 0 && Math.abs(this.vel.dot(q.fwd)) > 8)) {
+          // which bit of the car met the rail: the nose turned into it, the tail swung out, or the flank
+          const toWall = TMP.copy(q.right).multiplyScalar(side);
+          const nose = this.fwd.dot(toWall);
+          const lx = -this.right.dot(toWall);
+          const k = clamp(nose * 4, -1, 1);
+          const h = this.hitbox;
+          const lz = k >= 0 ? k * h.front * 0.8 : k * h.back * 0.8;
+          const along = Math.abs(this.vel.dot(q.fwd));
+          this.events.push({
+            type: 'impact',
+            point: new Vector3(Math.sign(lx || 1) * h.halfWidth, 0.5, lz),
+            dir: new Vector3(-Math.sign(lx || 1) * Math.min(1, Math.abs(lx) + 0.4), 0, -k * 0.6).normalize(),
+            speed: Math.max(0, vn),
+            scrape: along,
+          });
+          this.grindTimer = 0.12;
+        }
         if (vn > 0) {
           this.vel.addScaledVector(q.right, -side * vn * 1.25);
           this.vel.multiplyScalar(1 - Math.min(0.25, vn * 0.01));
@@ -522,6 +551,13 @@ export class CarPhysics {
       }
     }
     this.impact = Math.max(this.impact, vn);
+    if (vn > 2) {
+      // into car space: the side facing the obstacle takes it
+      const ln = TMP.set(-n.dot(this.right), n.dot(this.up), n.dot(this.fwd));
+      const h = this.hitbox;
+      const pt = new Vector3(-ln.x * h.halfWidth, 0.5, -ln.z * (ln.z < 0 ? h.front : h.back) * 0.85);
+      this.events.push({ type: 'impact', point: pt, dir: new Vector3(ln.x, 0, ln.z).normalize(), speed: vn, scrape: Math.abs(this.vel.dot(this.fwd)) * 0.5 });
+    }
     if (vn > 3) {
       this.events.push({ type: 'wall', strength: Math.min(1, vn / 25) });
       this.jolt(n.dot(this.right) * -1, n.dot(this.fwd) * -1, Math.min(1, vn / 20));
@@ -547,6 +583,17 @@ export class CarPhysics {
     this.vel.multiplyScalar(1 - loss);
     this.heaveVel -= Math.min(4, into * 0.12) * (1.2 - this.stats.landingLoss * 2);
     if (this.airTime > 0.25) this.events.push({ type: 'land', strength: Math.min(1, into / 25 + this.airTime * 0.2) });
+    // a heavy or crooked landing: the corner that touched first takes it
+    const hard = into * (0.3 + misalign * 3);
+    if (hard > 5 && this.airTime > 0.25) {
+      const ln = new Vector3(-normal.dot(this.right), normal.dot(this.up), normal.dot(this.fwd));
+      const h = this.hitbox;
+      const upsideDown = ln.y < 0;
+      const pt = upsideDown
+        ? new Vector3(0, h.height, 0)
+        : new Vector3(-Math.sign(ln.x) * h.halfWidth * Math.min(1, Math.abs(ln.x) * 4), 0.25, -Math.sign(ln.z) * Math.min(1, Math.abs(ln.z) * 4) * (ln.z < 0 ? h.front : h.back) * 0.9);
+      this.events.push({ type: 'impact', point: pt, dir: upsideDown ? new Vector3(0, -1, 0) : ln.clone().normalize(), speed: hard, scrape: 0 });
+    }
   }
 
   /**

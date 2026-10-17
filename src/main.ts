@@ -25,6 +25,8 @@ import { computeStats, displayStats } from './car/stats';
 import { GarageScene } from './world/garageScene';
 import { Sky } from './world/sky';
 import { FreeRoam, ZoneWorld, type ZonePayload } from './zone/freeRoam';
+import { CrashSystem } from './game/crash';
+import { DAMAGE_MODES } from './car/damage';
 
 type State = 'menu' | 'garage' | 'race' | 'results' | 'mp' | 'zone';
 
@@ -97,7 +99,16 @@ class App {
     const canTilt = isTouch() && tiltSupported();
     const controlsLabel = () => (this.settings.controls === 'tilt' ? 'CONTROLOS: INCLINAÇÃO' : 'CONTROLOS: BOTÕES');
     const resLabel = () => `RESOLUÇÃO: ${renderScaleLabel(this.settings.resolution)}`;
-    this.menu = new MenuScreen(ui, this.settings.muted, canTilt ? controlsLabel() : null, resLabel());
+    const damageLabel = () => `DANOS: ${{ full: 'REALISTAS', visual: 'SÓ VISUAIS', off: 'DESLIGADOS' }[this.settings.damage]}`;
+    CrashSystem.mode = this.settings.damage;
+    this.menu = new MenuScreen(ui, this.settings.muted, canTilt ? controlsLabel() : null, resLabel(), damageLabel());
+    this.menu.onDamage = () => {
+      const i = DAMAGE_MODES.indexOf(this.settings.damage);
+      this.settings.damage = DAMAGE_MODES[(i + 1) % DAMAGE_MODES.length];
+      CrashSystem.mode = this.settings.damage;
+      storage.saveSettings(this.settings);
+      return damageLabel();
+    };
     this.garage = new GarageScreen(ui);
     this.results = new ResultsScreen(ui);
     this.pause = new PauseScreen(ui, canTilt, resLabel());

@@ -8,7 +8,7 @@ import { engineProfile } from '../audio/engineProfile';
 import { audio } from '../core/audio';
 import type { Input } from '../core/input';
 import type { Renderer } from '../core/renderer';
-import { Track } from '../track/track';
+import { HALF_WIDTH, makeQuery, Track } from '../track/track';
 import { SKYWAY } from '../track/skyway';
 import { Decor } from '../world/decor';
 import { Particles } from '../world/particles';
@@ -18,6 +18,8 @@ import { TrackStructures } from '../world/structures';
 import type { Hud } from '../ui/hud';
 import { AiDriver } from './ai';
 import { collideCars, type CarContact } from './carCollision';
+import { CrashSystem, DMG_TAG, netDamageDue, sagBody } from './crash';
+import type { CarDamage, ImpactResult } from '../car/damage';
 import { CarPhysics, NITRO_PICKUP, type DriveInput } from './carPhysics';
 import { ChaseCamera, type CameraZoom } from './chaseCamera';
 import { GhostPlayer, GhostRecorder, type GhostLap } from './ghost';
@@ -132,6 +134,10 @@ interface RaceCar {
   netQuat: Quaternion;
   gone: boolean;
   tag: HTMLElement | null;
+  damage?: CarDamage;
+  /** online: last damage revision sent, and how many more packets repeat it */
+  netDmgRev: number;
+  netDmgRepeat: number;
 }
 
 export const LAPS = 3;
@@ -174,6 +180,12 @@ export class Race {
   private sendTimer = 0;
   private snap: CarSnapshot | null = null;
   private tags: HTMLElement | null = null;
+  /** dents, flying parts, smoke and wrecks for every car */
+  readonly crash: CrashSystem;
+  private byPhysics = new Map<CarPhysics, RaceCar>();
+  /** a moment of slow motion when the player is wrecked (offline only) */
+  private slowmo = 0;
+  private sendCount = 0;
   onFinish: ((r: RaceResult) => void) | null = null;
 
   constructor(
@@ -225,7 +237,7 @@ export class Race {
       const s = (mode === 'timetrial' ? track.length - 12 : track.length - 14 - row * 13) + startOffset;
       const lat = mode === 'timetrial' ? 0 : i % 2 ? 4.2 : -4.2;
       physics.reset(s, lat);
-      const visual = buildCar(g.build);
+      const visual = buildCar(g.build, { damage: true });
       physics.hitbox = visual.hitbox;
       world.sky.castShadows(visual.root);
       world.scene.add(visual.root);
@@ -261,11 +273,37 @@ export class Race {
         netQuat: new Quaternion(),
         gone: false,
         tag: null,
+        netDmgRev: -1,
+        netDmgRepeat: 0,
       };
       this.cars.push(car);
+      this.byPhysics.set(physics, car);
       this.physicsList.push(physics);
       if (car.isPlayer) this.player = car;
     });
+
+    // debris bounces on the deck (and falls off its edges into the sky)
+    const q = makeQuery();
+    this.crash = new CrashSystem(
+      world.scene,
+      world.particles,
+      (p, hint, up) => {
+        const r = track.query(p, hint.i, q);
+        hint.i = r.index;
+        if (r.gap || Math.abs(r.lateral) > HALF_WIDTH + 1.2) return null;
+        up.copy(r.up);
+        return r.height;
+      },
+      {
+        playerHit: (r) => this.onPlayerCrash(r),
+        recover: (c) => {
+          c.physics.respawn();
+          if (c.isPlayer) this.hud?.message('REPARADO', 1.3);
+        },
+      },
+      mode === 'attract' ? 'visual' : CrashSystem.mode,
+    );
+    this.cars.forEach((c, i) => this.crash.add(c, (net ? hashId(c.id) : 0) + i + 1));
 
     if (mode === 'timetrial' && ghost) {
       this.ghostPlayer = new GhostPlayer(ghost);
@@ -275,6 +313,7 @@ export class Race {
     }
     if (this.player) {
       this.cockpit = new Cockpit(this.player.build, isTouch(), world.sky.envMap);
+      if (this.player.visual.damage) this.cockpit.setDamage(this.player.visual.damage.uniforms);
       this.startAudio();
       hud?.setTrack(track);
       hud?.show(true, mode === 'timetrial' ? 'timetrial' : 'race');
@@ -315,6 +354,8 @@ export class Race {
     const seenPos = TMP.copy(p.pos).add(c.netOffset);
     const seenQuat = TQ.copy(c.netQuat).multiply(p.quat);
     applyCar(p, s, this.world.track.samples.length);
+    const at = (d as number[]).indexOf(DMG_TAG, 27);
+    if (at > 0) this.crash.apply(c, d as number[], at + 1);
     c.lastInput = s.input;
     c.lap = s.lap;
     c.finished = s.finished;
@@ -395,6 +436,11 @@ export class Race {
     if (this.paused) {
       this.updateVisuals(0);
       return;
+    }
+    if (this.slowmo > 0) {
+      // the wreck plays out slowly, then time catches up
+      this.slowmo -= dt;
+      dt *= 0.28 + 0.72 * Math.max(0, Math.min(1, 1 - this.slowmo / 0.5));
     }
     const racing = this.countdown <= 0;
 
@@ -493,6 +539,7 @@ export class Race {
 
     this.fxTime += dt;
     this.updateVisuals(dt);
+    this.crash.update(dt, this.live, camera.position);
     this.world.view.update(dt, this.time);
     this.world.structures.update(this.time);
     this.world.structures.setStartLights(this.mode === 'attract' ? 'go' : this.countdown > 0 ? 'red' : 'go');
@@ -552,10 +599,13 @@ export class Race {
     this.sendTimer -= dt;
     if (this.sendTimer > 0) return;
     this.sendTimer = 0.05;
+    this.sendCount++;
     for (const c of this.cars) {
       if (!c.owned || c.gone) continue;
       const best = c.lapTimes.length ? Math.min(...c.lapTimes) : null;
-      net.room.sendState(c.id, packCar(c.physics, c.lastInput, { rt: this.countdown > 0 ? 0 : this.time, lap: c.lap, finished: c.finished, finishTime: c.finishTime, bestLap: best }));
+      const d = packCar(c.physics, c.lastInput, { rt: this.countdown > 0 ? 0 : this.time, lap: c.lap, finished: c.finished, finishTime: c.finishTime, bestLap: best });
+      if (c.damage && netDamageDue(c, this.sendCount)) d.push(DMG_TAG, ...c.damage.pack());
+      net.room.sendState(c.id, d);
     }
   }
 
@@ -734,6 +784,8 @@ export class Race {
   private handleEvents(c: RaceCar) {
     const p = c.physics;
     for (const e of p.events) {
+      if (e.type === 'impact' || e.type === 'respawn') this.crash.event(c, e);
+      if (e.type === 'impact') continue;
       // exhaust effects and engine sounds happen for every car
       if (e.type === 'pop') {
         c.visual.exhaust?.pop(e.strength);
@@ -809,6 +861,7 @@ export class Race {
 
   private collide() {
     const contacts = collideCars(this.physicsList, this.contacts);
+    this.crash.contacts(contacts, (p) => this.byPhysics.get(p));
     const pl = this.player?.physics;
     const parts = this.world.particles;
     for (const ct of contacts) {
@@ -832,6 +885,16 @@ export class Race {
         audio.scrape(ct.scrape / 20);
         this.scrapeCooldown = 0.07;
       }
+    }
+  }
+
+  /** The player's car took a hit: the camera, the phone and the HUD feel it. */
+  private onPlayerCrash(r: ImpactResult) {
+    this.chase.addShake(0.15 + r.severity * 1.3);
+    if (r.severity > 0.12 && isTouch()) navigator.vibrate?.(r.totaled ? [60, 40, 140] : Math.round(20 + r.severity * 60));
+    if (r.totaled) {
+      this.hud?.message('DESTRUÍDO!', 2.4, 'big');
+      if (!this.net) this.slowmo = 1.5;
     }
   }
 
@@ -874,6 +937,7 @@ export class Race {
       }
       v.body.rotation.set(p.pitch, 0, p.roll);
       v.body.position.y = p.heave * 0.5;
+      sagBody(c);
       const counter = p.drifting ? p.driftDir * 0.35 : 0;
       v.updateWheels({
         steer: p.steerVisual + counter,
@@ -957,6 +1021,7 @@ export class Race {
   private updateHud(dt: number) {
     if (!this.hud || !this.player) return;
     const p = this.player.physics;
+    this.hud.setDamage(this.player.damage);
     this.input?.setNitro(p.nitro, p.nitroActive);
     const best = this.mode === 'timetrial' ? this.ghostBest?.time ?? null : this.player.lapTimes.length ? Math.min(...this.player.lapTimes) : null;
     let ghostDelta: number | null = null;
@@ -1037,6 +1102,7 @@ export class Race {
   dispose() {
     if (this.net && this.net.room.onState) this.net.room.onState = null;
     this.tags?.remove();
+    this.crash.dispose();
     for (const c of this.cars) {
       if (c.voice && !c.isPlayer) audio.stopVoice(c.voice);
       this.world.scene.remove(c.visual.root);
@@ -1052,6 +1118,12 @@ export class Race {
     this.hud?.show(false);
     this.hud?.setCountdown('');
   }
+}
+
+function hashId(id: string) {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return h % 100000;
 }
 
 const TMP = new Vector3();
