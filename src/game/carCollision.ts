@@ -12,6 +12,9 @@ export interface CarContact {
   impulse: number;
   /** relative sliding speed along the contact, for scrape sparks */
   scrape: number;
+  /** each car's own velocity change (m/s): the lighter car takes more of the hit */
+  dvA: number;
+  dvB: number;
 }
 
 /** How bouncy a hit is. Arcade: a solid "bonk", not billiards. */
@@ -201,7 +204,7 @@ function collidePair(a: CarPhysics, b: CarPhysics): CarContact | null {
   a.jolt(normal.dot(a.right), normal.dot(a.fwd), strength * (mb / (ma + mb)) * 2);
   b.jolt(-normal.dot(b.right), -normal.dot(b.fwd), strength * (ma / (ma + mb)) * 2);
 
-  return { a, b, point: P.clone(), normal: normal.clone(), impulse: dv, scrape: vt };
+  return { a, b, point: P.clone(), normal: normal.clone(), impulse: dv, scrape: vt, dvA: Math.hypot(jn, jt) * inva, dvB: Math.hypot(jn, jt) * invb };
 }
 
 function clamp(v: number, lo: number, hi: number) {

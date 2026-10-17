@@ -40,6 +40,12 @@ import { Underglow } from './underglow';
 import { createCarMaterials, getSharedMaterials, type CarMaterials, type PaintLayout } from './materials';
 import type { CarBuild } from './parts';
 import { skeletonFor, TRAVEL } from './skeleton';
+import { PART } from './damage';
+import { damaged, type DamageKind } from './damageShader';
+import { shellPanel, splitByPart, underSkin, withPart, type PanelRules } from './damageParts';
+import { DamageRig, type PartPiece } from './damageRig';
+import type { Surface } from './surface';
+import { ZONE } from './zones';
 
 export interface WheelState {
   steer: number;
@@ -60,6 +66,12 @@ export interface CarVisual {
   exhaust: ExhaustFx | null;
   /** LED tubes under the car and their light on the road (null when off, and for the ghost) */
   underglow: Underglow | null;
+  /** dents, loose panels and debris (null unless built with `damage`) */
+  damage: DamageRig | null;
+  /** wheel centres in car space (front +x, front -x, rear +x, rear -x) */
+  wheelCentres: [number, number, number][];
+  /** a wheel torn off: its tyre, rim and brake as a loose object in car space, centred on the hub */
+  wheelDebris(i: number): Group;
   /** world position of exhaust tip i */
   tipWorld(i: number, out: Vector3): Vector3;
   updateWheels(state: WheelState): void;
@@ -97,7 +109,17 @@ export function mergeAll(list: BufferGeometry[], keepZone = false): BufferGeomet
   return mergeGeometries(geos, false);
 }
 
-type CarGeometry = { buckets: PartGeo; exhaustTips: Vector3[]; layout: PaintLayout };
+type CarGeometry = {
+  buckets: PartGeo;
+  exhaustTips: Vector3[];
+  layout: PaintLayout;
+  /** which damage part each bucket geometry belongs to (body when missing) */
+  partOf: Map<BufferGeometry, number>;
+  /** inner skins behind the panels that can come off (hidden until they do) */
+  under: { key: keyof PartGeo; geo: BufferGeometry; part: number }[];
+  /** the outer skin, for placing hits */
+  surface: Surface;
+};
 
 /** Small LRU caches: swapping one part in the garage only rebuilds what that part changes. */
 const shellCache = new Map<string, ShellInfo>();
@@ -133,12 +155,53 @@ export function buildCarGeometry(build: CarBuild): CarGeometry {
     const spoiler = spoilerPart(build.spoiler, shell);
     const lights = headlightPart(build.headlights, shell);
     const exhaust = exhaustPart(build.exhaust, shell);
-    const parts: PartGeo[] = [shell.geo, cabin, front, rear, hood, skirts, spoiler, lights, exhaust.geo];
-    const all = emptyPart();
-    for (const p of parts) {
-      for (const k of Object.keys(all) as (keyof PartGeo)[]) all[k].push(...p[k].map((g) => normalizeGeo(g, k === 'paint')));
-    }
     const K = shell.K;
+    // damage parts: the shell is cut into its bumper covers and hood panel, the rest go whole
+    const rules: PanelRules = {
+      hoodStart: shell.hoodStart + 0.06,
+      hoodEnd: shell.hoodEnd,
+      endFront: shell.bumpers.front,
+      endRear: shell.bumpers.rear,
+      archF: [K.front.r, K.front.z, K.front.arch - 0.004],
+      archR: [K.rear.r, K.rear.z, K.rear.arch - 0.004],
+      wellX: K.wellX,
+    };
+    const parts: [PartGeo, number][] = [
+      [cabin, PART.body],
+      [front, PART.front],
+      [rear, PART.rear],
+      [hood, PART.hood],
+      [skirts, PART.skirts],
+      [spoiler, PART.spoiler],
+      [lights, PART.front],
+      [exhaust.geo, PART.exhaust],
+    ];
+    const all = emptyPart();
+    const partOf = new Map<BufferGeometry, number>();
+    const under: CarGeometry['under'] = [];
+    for (const k of Object.keys(all) as (keyof PartGeo)[]) {
+      for (const g0 of shell.geo[k]) {
+        const g = normalizeGeo(g0, k === 'paint');
+        const auto = k === 'paint' && g.getAttribute('zone')?.getX(0) === ZONE.auto;
+        for (const [part, piece] of splitByPart(g, (c, n) => shellPanel(c, n, rules, auto))) {
+          all[k].push(piece);
+          partOf.set(piece, part);
+          if (auto && part !== PART.body) {
+            const inner = part === PART.hood ? PART.underHood : part === PART.front ? PART.underFront : PART.underRear;
+            under.push({ key: 'trim', geo: underSkin(piece, part === PART.hood ? 0.07 : 0.045), part: inner });
+          }
+        }
+      }
+    }
+    for (const [p, part] of parts) {
+      for (const k of Object.keys(all) as (keyof PartGeo)[]) {
+        for (const g0 of p[k]) {
+          const g = normalizeGeo(g0, k === 'paint');
+          all[k].push(g);
+          partOf.set(g, part);
+        }
+      }
+    }
     const layout: PaintLayout = {
       hoodStart: shell.hoodStart + 0.06,
       hoodEnd: shell.hoodEnd,
@@ -150,7 +213,7 @@ export function buildCarGeometry(build: CarBuild): CarGeometry {
       lift: K.lift,
       wellX: K.wellX,
     };
-    return { buckets: all, exhaustTips: exhaust.tips, layout };
+    return { buckets: all, exhaustTips: exhaust.tips, layout, partOf, under, surface: shell.surface };
   });
 }
 
@@ -159,10 +222,36 @@ const _q = new Quaternion();
 const _e = new Euler();
 const _p = new Vector3();
 const _s = new Vector3(1, 1, 1);
+const _q2 = new Quaternion();
+const _q3 = new Quaternion();
+const _q4 = new Quaternion();
+const _x = new Vector3(1, 0, 0);
+const _z = new Vector3(0, 0, 1);
+const ZERO_M = new Matrix4().makeScale(0, 0, 0);
 
-export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVisual {
+/** How each bucket shows damage. */
+const DAMAGE_KIND: Record<keyof PartGeo, DamageKind> = {
+  paint: 'paint',
+  trim: 'solid',
+  carbon: 'solid',
+  chrome: 'solid',
+  plastic: 'solid',
+  glass: 'glass',
+  light: 'basicLamp',
+  tail: 'basicLamp',
+  housing: 'lamp',
+  lens: 'lamp',
+  tailLens: 'lamp',
+};
+
+/**
+ * `damage`: the car can be dented and lose parts (races, free roam). Every
+ * material becomes a per-car copy that reads this car's dents; the garage and
+ * the ghost skip it.
+ */
+export function buildCar(build: CarBuild, opts: { ghost?: boolean; damage?: boolean } = {}): CarVisual {
   const shared = getSharedMaterials();
-  const { buckets, exhaustTips, layout } = buildCarGeometry(build);
+  const { buckets, exhaustTips, layout, partOf, under, surface } = buildCarGeometry(build);
   const mats = createCarMaterials(build, layout);
   const ghostMat = opts.ghost
     ? new MeshBasicMaterial({ color: new Color(0.3, 0.9, 1.4), transparent: true, opacity: 0.22, depthWrite: false })
@@ -187,24 +276,59 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     ['lens', shared.lens],
   ];
   const owned: BufferGeometry[] = [];
-  for (const [key, mat] of table) {
-    const geo = mergeAll(buckets[key], key === 'paint');
+  const withDamage = !!opts.damage && !opts.ghost;
+  const pieces = new Map<number, PartPiece[]>();
+  const boxes = new Map<number, Box3>();
+  const ownedMats: Material[] = [];
+  let rig: DamageRig | null = null;
+  if (withDamage) {
+    for (const [, part] of partOf) if (!boxes.has(part)) boxes.set(part, new Box3());
+    rig = new DamageRig(boxes, pieces, surface);
+  }
+  const visibleBounds = new Box3();
+  for (const [key, mat0] of table) {
+    let mat = pick(mat0);
+    let geo: BufferGeometry | null;
+    if (rig) {
+      // per-car copies (the paint and tail lamps are already this car's own)
+      const own = mat0 === mats.paint || mat0 === mats.tail;
+      mat = damaged(mat0, rig.uniforms, DAMAGE_KIND[key], own);
+      if (!own) ownedMats.push(mat);
+      const list = buckets[key];
+      const tagged = list.map((g) => withPart(g, partOf.get(g) ?? PART.body));
+      for (const u of under) if (u.key === key) tagged.push(withPart(u.geo, u.part));
+      geo = tagged.length ? mergeGeometries(tagged, false) : null;
+      for (const g of list) {
+        const part = partOf.get(g) ?? PART.body;
+        g.computeBoundingBox();
+        if (g.boundingBox) boxes.get(part)?.union(g.boundingBox);
+        if (part === PART.body) continue;
+        let entry = pieces.get(part)?.find((p) => p.mat === mat);
+        if (!entry) {
+          entry = { mat, geos: [] };
+          if (!pieces.has(part)) pieces.set(part, []);
+          pieces.get(part)!.push(entry);
+        }
+        entry.geos.push(g);
+      }
+    } else geo = mergeAll(buckets[key], key === 'paint');
     if (!geo) continue;
     owned.push(geo);
-    const mesh = new Mesh(geo, pick(mat));
+    const mesh = new Mesh(geo, mat);
     mesh.castShadow = false;
+    if (rig) mesh.customDepthMaterial = rig.depthMaterial;
     body.add(mesh);
+    // the hidden inner skins sit inside the shell: they never widen the hitbox
+    if (!rig) {
+      geo.computeBoundingBox();
+      if (geo.boundingBox) visibleBounds.union(geo.boundingBox);
+    }
   }
+  if (rig) for (const b of boxes.values()) visibleBounds.union(b);
 
   // collision box: the union of every visible part plus the wheels, so a long
   // splitter, wide skirts or a tall wing all count
-  const bounds = new Box3();
-  for (const child of body.children) {
-    const g = (child as Mesh).geometry;
-    if (!g) continue;
-    g.computeBoundingBox();
-    if (g.boundingBox) bounds.union(g.boundingBox);
-  }
+  const bounds = visibleBounds;
   const K = skeletonFor(build.body);
   bounds.expandByPoint(_p.set(K.front.x + K.front.width / 2, 0, K.front.z + K.front.r));
   bounds.expandByPoint(_p.set(-K.rear.x - K.rear.width / 2, 0, K.rear.z - K.rear.r));
@@ -282,6 +406,23 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     exhaustTips,
     exhaust,
     underglow,
+    damage: rig,
+    wheelCentres: wheelPos.map(([x, z], i) => [x, (i < 2 ? K.front : K.rear).r, z] as [number, number, number]),
+    wheelDebris(i: number) {
+      const g = new Group();
+      const [x, z, side] = wheelPos[i];
+      const front = i < 2;
+      g.position.set(x, (front ? K.front : K.rear).r, z);
+      const sc = front ? frontScale : _s;
+      for (const im of [...spinning, ...fixed]) {
+        const m = new Mesh(im.geometry, im.material);
+        m.scale.copy(sc);
+        if (side < 0) m.rotation.y = Math.PI;
+        m.frustumCulled = false;
+        g.add(m);
+      }
+      return g;
+    },
     tipWorld(i: number, out: Vector3) {
       body.updateWorldMatrix(true, false);
       return body.localToWorld(out.copy(exhaustTips[i % Math.max(1, exhaustTips.length)] ?? _p.set(0, 0.3, -2.2)));
@@ -297,10 +438,22 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
         const sc = front ? frontScale : _s;
         // left-side wheels are the right-side wheel turned around, so no mirroring is needed
         const flip = side < 0 ? Math.PI : 0;
-        _e.set(0, steer + flip, 0, 'YXZ');
+        const wd = rig?.wheels[i];
+        if (wd?.gone) {
+          for (const im of spinning) im.setMatrixAt(i, ZERO_M);
+          for (const im of fixed) im.setMatrixAt(i, ZERO_M);
+          continue;
+        }
+        // bent suspension: the wheel leans in at the top, points off line and wobbles as it turns
+        const bend = wd ? Math.abs(wd.camber) + Math.abs(wd.toe) : 0;
+        const toe = wd ? side * wd.toe + Math.sin(state.spin) * bend * 0.18 : 0;
+        const camber = wd ? -side * wd.camber + Math.cos(state.spin) * bend * 0.08 : 0;
+        if (wd) _p.y -= Math.abs(wd.camber) * 0.12;
+        _e.set(0, steer + toe + flip, 0, 'YXZ');
         _q.setFromEuler(_e);
-        const spinQ = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), side < 0 ? -state.spin : state.spin);
-        _m.compose(_p, _q.clone().multiply(spinQ), sc);
+        if (camber) _q.premultiply(_q2.setFromAxisAngle(_z, camber));
+        const spinQ = _q3.setFromAxisAngle(_x, side < 0 ? -state.spin : state.spin);
+        _m.compose(_p, _q4.copy(_q).multiply(spinQ), sc);
         for (const im of spinning) im.setMatrixAt(i, _m);
         _m.compose(_p, _q, sc);
         for (const im of fixed) im.setMatrixAt(i, _m);
@@ -313,6 +466,8 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
       underglow?.dispose();
       for (const g of owned) g.dispose();
       mats.dispose();
+      for (const m of ownedMats) m.dispose();
+      rig?.dispose();
       ghostMat?.dispose();
     },
   };

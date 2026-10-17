@@ -6,6 +6,16 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-17 21:00 UTC',
+    entries: [
+      'Cars now take real damage. Every hit dents and crumples the bodywork where it landed, scratches the paint down to primer and bare metal, cracks the glass into spider webs and smashes the lamps, on every body and part combination, rivals and online players included.',
+      'Panels give way: bumpers hang off one corner and drag sparks along the road, the hood pops up and flutters, wings lean over and exhausts droop, until they tear off and tumble down the track. Hard hits bend the wheels, so the car pulls to one side and wobbles.',
+      'A battered engine steams, then smokes grey and black, misfires and loses power, and finally catches fire. Total it and the car blows up in slow motion, sheds its panels and a wheel, then comes back repaired a few seconds later. Respawning also repairs your car.',
+      'New crash sounds (crunching metal, ringing panels, breaking glass, a deep explosion), a car-condition meter on the HUD, windscreen cracks visible from the cockpit, and a rumble on phones for big hits.',
+      'New "Danos" setting: realistic (damage changes the handling and cars can be wrecked), visual only, or off.',
+    ],
+  },
+  {
     hour: '2026-10-17 20:00 UTC',
     entries: [
       "Cockpit fit fixed on every car: the digital dashboard no longer sinks into the dash and is always readable through the wheel, the seat now rises on a riser in tall cars like the Hot Hatch and Rally Raid so you sit properly behind the wheel, and the drift handbrake and gear lever stay below your view of the road in low cars like the Protótipo.",

@@ -56,6 +56,10 @@ export class Surface {
     this.cache.set(key, out);
     return out && { point: out.point.clone(), normal: out.normal.clone() };
   }
+  /** First hit along a ray, uncached (for one-off runtime casts). */
+  hit(origin: Vector3, dir: Vector3): Vector3 | null {
+    return this.root ? this.trace(origin, dir.clone().normalize())?.point ?? null : null;
+  }
   private trace(o: Vector3, d: Vector3): { point: Vector3; normal: Vector3 } | null {
     const ox = o.x;
     const oy = o.y;

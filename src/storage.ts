@@ -3,6 +3,7 @@ import type { ControlMode } from './core/input';
 import { RENDER_SCALES, type RenderScale } from './core/renderer';
 import type { TiltSens } from './core/tilt';
 import type { CameraZoom } from './game/chaseCamera';
+import { DAMAGE_MODES, type DamageMode } from './car/damage';
 import type { GhostLap } from './game/ghost';
 
 export interface Settings {
@@ -15,6 +16,8 @@ export interface Settings {
   tiltCenter: number;
   /** Render resolution: 'auto' (dynamic) or a fixed share of native. */
   resolution: RenderScale;
+  /** Car damage: dents, parts and wrecks that change the handling, the looks only, or none. */
+  damage: DamageMode;
 }
 
 const KEY_BUILD = 'hyperdrift.build.v1';
@@ -59,6 +62,7 @@ export const storage = {
       tiltSens: 1,
       tiltCenter: 0,
       resolution: 'auto',
+      damage: 'full',
       ...(get<Partial<Settings>>(KEY_SETTINGS) ?? {}),
     };
     if (s.camZoom !== 0 && s.camZoom !== 1 && s.camZoom !== 2 && s.camZoom !== 3) s.camZoom = 1;
@@ -66,6 +70,7 @@ export const storage = {
     if (s.tiltSens !== 0 && s.tiltSens !== 1 && s.tiltSens !== 2) s.tiltSens = 1;
     if (typeof s.tiltCenter !== 'number' || !isFinite(s.tiltCenter) || Math.abs(s.tiltCenter) > 1.2) s.tiltCenter = 0;
     if (!RENDER_SCALES.includes(s.resolution)) s.resolution = 'auto';
+    if (!DAMAGE_MODES.includes(s.damage)) s.damage = 'full';
     return s;
   },
   saveSettings: (s: Settings) => set(KEY_SETTINGS, s),

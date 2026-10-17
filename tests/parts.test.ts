@@ -59,7 +59,8 @@ describe('car parts', () => {
                     // the tyre's envelope: radius plus the most upward travel we ever draw, across its width plus steering sweep
                     if (ax < a.x - a.width / 2 - 0.09 || ax > a.x + a.width / 2 - 0.01) continue;
                     const r = Math.hypot(pos.getY(i) - a.r, pos.getZ(i) - a.z);
-                    expect(r, `${body.id}/${front.id}/${rear.id}/${skirts.id} ${bucket}`).toBeGreaterThan(a.r + TRAVEL.up);
+                    // expect() only on a miss: called per vertex it costs more than the whole build
+                    if (r <= a.r + TRAVEL.up) expect(r, `${body.id}/${front.id}/${rear.id}/${skirts.id} ${bucket}`).toBeGreaterThan(a.r + TRAVEL.up);
                   }
                 }
               }

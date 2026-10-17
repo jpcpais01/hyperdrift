@@ -2375,6 +2375,50 @@ body[data-input='pointer'] .gp-hints {
   bottom: calc(16px + var(--safe-b));
   text-align: right;
 }
+.hud-dmg {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 34px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.4s, transform 0.4s;
+}
+.hud-dmg.on {
+  opacity: 1;
+  transform: none;
+}
+.hud-dmg svg {
+  width: 22px;
+  height: 35px;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.5));
+}
+.hud-dmg svg path,
+.hud-dmg svg rect {
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 1;
+  transition: fill 0.25s;
+}
+.hud-dmg b {
+  font-size: 15px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  min-width: 3.2em;
+  text-align: left;
+}
+.hud-dmg.dead {
+  animation: dmg-dead 0.6s steps(2) infinite;
+}
+.hud-dmg.dead b {
+  color: #ff4a3d;
+}
+@keyframes dmg-dead {
+  50% {
+    opacity: 0.35;
+  }
+}
 .hud-speed .v {
   font-size: 60px;
   font-weight: 900;
@@ -2632,6 +2676,10 @@ body[data-input='pointer'] .gp-hints {
   }
   .hud-gear {
     display: none;
+  }
+  .hud-dmg {
+    right: calc(100% + 16px);
+    bottom: 6px;
   }
 }
 

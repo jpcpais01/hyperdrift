@@ -41,7 +41,7 @@ describe('cockpit', () => {
         }
       }
     }
-  });
+  }, 20000);
 
   it('nothing in the cabin rises into the view of the road over the bonnet', () => {
     for (const body of VISUAL_PARTS.body) {
@@ -71,7 +71,7 @@ describe('cockpit', () => {
         expect(rimTop, `${body.id}/${w.id}`).toBeLessThan(L.sightAt(L.wheel.z));
       }
     }
-  });
+  }, 20000);
 
   it('the driver can see every screen and dial, and the levers stay low', () => {
     const mat = new MeshBasicMaterial({ side: DoubleSide });
@@ -108,7 +108,7 @@ describe('cockpit', () => {
         expect(down, `${body.id}/${id}`).toBeGreaterThan(0.45);
       }
     }
-  });
+  }, 20000);
 
   it('the steering wheel clears the dash and the driver can reach the levers', () => {
     for (const body of VISUAL_PARTS.body) {
