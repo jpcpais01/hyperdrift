@@ -906,10 +906,8 @@ export class FreeRoam {
     p.events.length = 0;
   }
 
-  /** The player's car took a hit: the camera, the phone and the HUD feel it. */
+  /** The player's car was totaled: say so on the HUD. */
   private onPlayerCrash(r: ImpactResult) {
-    this.chase.addShake(0.15 + r.severity * 1.3);
-    if (r.severity > 0.12 && isTouch()) navigator.vibrate?.(r.totaled ? [60, 40, 140] : Math.round(20 + r.severity * 60));
     if (r.totaled) this.hud.message('DESTRUÍDO!', 2.4, 'big');
   }
 
