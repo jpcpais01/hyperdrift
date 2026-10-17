@@ -1091,6 +1091,107 @@ body[data-input='pointer'] .rc-hints {
 .set-row:not(:has(.switch.on)) .wave {
   opacity: 0.2;
 }
+/* volume bars: one row per mixer channel */
+.vol-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  transition: opacity 0.25s;
+}
+.vol-group.muted {
+  opacity: 0.4;
+}
+.vol-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 38px;
+  align-items: center;
+  gap: 14px;
+  min-height: 56px;
+  padding: 6px 12px 6px 14px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  text-align: left;
+  transition: background 0.18s;
+}
+@media (hover: hover) {
+  .vol-row:hover {
+    background: rgba(255, 255, 255, 0.07);
+  }
+}
+#ui .vol-row:focus {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(41, 224, 255, 0.35);
+}
+.vol-name {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.vol-name b {
+  font: 700 15px/1.1 var(--f-display);
+  letter-spacing: 0.02em;
+}
+.vol-name small {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vol-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 40px;
+  padding: 4px 2px;
+  cursor: pointer;
+  touch-action: none;
+}
+.vol-bars i {
+  width: 9px;
+  height: calc(28% + var(--i) * 8%);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.13);
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    transform 0.2s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+.vol-bars i.on {
+  /* cyan to magenta across the row, like an equaliser */
+  background: color-mix(in oklab, var(--accent), var(--accent2) calc(var(--i) * 11%));
+  box-shadow: 0 0 10px color-mix(in oklab, var(--accent), var(--accent2) calc(var(--i) * 11%));
+}
+.vol-row:focus .vol-bars i.on,
+.vol-row.drag .vol-bars i.on {
+  transform: scaleY(1.08);
+}
+.vol-pct {
+  font: italic 700 15px/1 var(--f-display);
+  text-align: right;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.vol-row.zero .vol-pct {
+  color: var(--muted);
+}
+.vol-row.zero .vol-name b {
+  text-decoration: line-through;
+  text-decoration-color: rgba(255, 255, 255, 0.35);
+}
+@media (max-width: 520px), (max-height: 420px) {
+  .vol-name small {
+    display: none;
+  }
+  .vol-bars i {
+    width: 7px;
+  }
+}
 .btn-update .upd-ico svg {
   transition: transform 0.5s ease;
 }

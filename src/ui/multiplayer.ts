@@ -176,7 +176,7 @@ export class MultiplayerScreen {
       else this.error(`O código tem ${CODE_LENGTH} números.`);
     } else if (this.digits.length < CODE_LENGTH) {
       this.digits += k;
-      audio.tone(520 + Number(k) * 40, 0.05, 'triangle', 0.12);
+      audio.tone(520 + Number(k) * 40, 0.05, 'triangle', 0.12, 0, audio.ui);
       // the last digit goes straight in
       if (this.digits.length === CODE_LENGTH) setTimeout(() => this.onJoin?.(this.digits), 160);
     }

@@ -108,6 +108,11 @@ class MenuNav {
     if (!layer) return;
     const cur = this.current(layer);
     if (!cur) return this.focusDefault(layer);
+    // sliders (volume bars) take left / right for themselves
+    if ((dir === 'left' || dir === 'right') && cur.hasAttribute('data-adjust')) {
+      cur.dispatchEvent(new CustomEvent('nav-adjust', { detail: dir === 'right' ? 1 : -1 }));
+      return;
+    }
     const r = cur.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;

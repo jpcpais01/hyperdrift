@@ -3,7 +3,7 @@ import '@fontsource-variable/saira/standard-italic.css';
 import '@fontsource-variable/inter/wght.css';
 import './style.css';
 import { randomBuild, sanitizeBuild, type CarBuild } from './car/parts';
-import { audio } from './core/audio';
+import { audio, type MixChannel } from './core/audio';
 import { canLockLandscape, installFirstTouch, isIOS, isPhone, isPortrait, isStandalone, isTouch } from './core/fullscreen';
 import { Input } from './core/input';
 import { cameraOrbit } from './game/cameraOrbit';
@@ -101,6 +101,7 @@ class App {
     const resLabel = () => `RESOLUÇÃO: ${renderScaleLabel(this.settings.resolution)}`;
     const damageLabel = () => `DANOS: ${{ full: 'REALISTAS', visual: 'SÓ VISUAIS', off: 'DESLIGADOS' }[this.settings.damage]}`;
     CrashSystem.mode = this.settings.damage;
+    audio.setMix(this.settings.volume);
     this.menu = new MenuScreen(ui, this.settings.muted, canTilt ? controlsLabel() : null, resLabel(), damageLabel());
     this.menu.onDamage = () => {
       const i = DAMAGE_MODES.indexOf(this.settings.damage);
@@ -111,7 +112,7 @@ class App {
     };
     this.garage = new GarageScreen(ui);
     this.results = new ResultsScreen(ui);
-    this.pause = new PauseScreen(ui, canTilt, resLabel());
+    this.pause = new PauseScreen(ui, canTilt, resLabel(), this.settings.muted);
     this.mp = new MultiplayerScreen(ui, this.callSign);
     storage.saveCallSign(this.callSign);
     const cycleResolution = () => {
@@ -192,11 +193,34 @@ class App {
     this.menu.onZone = () => this.startZone();
     this.menu.onOnline = () => this.go('mp');
     this.bindMultiplayer();
-    this.menu.onToggleSound = () => {
+    const toggleSound = () => {
       this.settings.muted = !this.settings.muted;
       audio.setMuted(this.settings.muted);
       storage.saveSettings(this.settings);
+      this.menu.setMuted(this.settings.muted);
+      this.pause.setMuted(this.settings.muted);
       return this.settings.muted;
+    };
+    this.menu.onToggleSound = toggleSound;
+    this.pause.onToggleSound = toggleSound;
+    let volSave = 0;
+    const setVolume = (ch: MixChannel, v: number) => {
+      this.settings.volume[ch] = v;
+      audio.setMix({ [ch]: v });
+      this.menu.volume.set(audio.mix);
+      this.pause.volume.set(audio.mix);
+      // dragging a bar fires a lot: write once it settles
+      clearTimeout(volSave);
+      volSave = window.setTimeout(() => storage.saveSettings(this.settings), 250);
+    };
+    this.menu.onVolume = setVolume;
+    this.pause.onVolume = setVolume;
+    // paused races are silent; with the sound panel up the engines idle so the bars can be heard
+    this.pause.onSoundPanel = (open) => {
+      const live = this.state === 'zone' ? this.zone : this.race;
+      if (!audio.ctx || !live || !live.paused) return;
+      if (open) void audio.ctx.resume();
+      else void audio.ctx.suspend();
     };
     this.garage.onChange = (b, slot) => {
       this.build = b;
