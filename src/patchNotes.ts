@@ -8,6 +8,8 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-17 20:00 UTC',
     entries: [
+      "Cockpit fit fixed on every car: the digital dashboard no longer sinks into the dash and is always readable through the wheel, the seat now rises on a riser in tall cars like the Hot Hatch and Rally Raid so you sit properly behind the wheel, and the drift handbrake and gear lever stay below your view of the road in low cars like the Protótipo.",
+      "Richer interiors: soft shadowing deep in the footwells and along the doors, a real windscreen with a tinted sun strip and sky reflections, a wood fascia with chrome-ringed vents and a glovebox in the GT cabin, defrost and speaker grilles on the dash top, and a neater dash clock.",
       'Big exterior detail pass on every car part. Headlights and tail lights are now real lamp units with polished reflectors, lit elements and clear lenses, and the glass is dark tinted and reflective.',
       'New tyres with moulded tread, rounded sidewalls and HYPERDRIFT lettering. Every rim design was rebuilt with shaped spokes, a machined chrome lip and proper lug nuts.',
       'Exhausts now sit in black cut-outs in the bumper, side skirts follow each body\'s wheel arches, and hood vents, intakes and canards are moulded into the panels instead of stuck on top. Carbon has a real twill weave and wings use a proper airfoil profile.',
