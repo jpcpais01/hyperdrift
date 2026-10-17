@@ -106,6 +106,8 @@ export interface ConformOpts {
   step?: number;
   /** a side wall running from the outline back into the skin, so the patch has visible thickness */
   wall?: number;
+  /** extra height at the centre, easing to none at the outline: a moulded lens or a raised panel */
+  dome?: number;
 }
 
 /**
@@ -129,12 +131,14 @@ export function conform(s: Surface, outline: [number, number][], proj: Projector
   const n = pts.length;
   const pos: number[] = [];
   const idx: number[] = [];
-  const centre = project(s, proj, ca, cb, off, depth);
+  const dome = opts.dome ?? 0;
+  const lift = (k: number) => off + dome * (1 - k * k);
+  const centre = project(s, proj, ca, cb, lift(0), depth);
   pos.push(centre.p.x, centre.p.y, centre.p.z);
   for (let r = 1; r <= rings; r++) {
     const k = r / rings;
     for (const [a, b] of pts) {
-      const h = project(s, proj, ca + (a - ca) * k, cb + (b - cb) * k, off, depth);
+      const h = project(s, proj, ca + (a - ca) * k, cb + (b - cb) * k, lift(k), depth);
       pos.push(h.p.x, h.p.y, h.p.z);
     }
   }

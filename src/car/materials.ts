@@ -21,10 +21,14 @@ import { PAINT_GLSL } from './paintShader';
 /** Shared, immutable materials (one program each, reused by every car). */
 export interface SharedMaterials {
   trim: MeshStandardMaterial;
-  carbon: MeshStandardMaterial;
+  carbon: MeshPhysicalMaterial;
   chrome: MeshStandardMaterial;
-  glass: MeshStandardMaterial;
+  glass: MeshPhysicalMaterial;
   tire: MeshStandardMaterial;
+  housing: MeshStandardMaterial;
+  lens: MeshPhysicalMaterial;
+  tailLens: MeshPhysicalMaterial;
+  plastic: MeshStandardMaterial;
   headlight: MeshBasicMaterial;
   brake: MeshStandardMaterial;
   caliper: MeshStandardMaterial;
@@ -35,25 +39,58 @@ let shared: SharedMaterials | null = null;
 
 function carbonTexture(): Texture | null {
   if (typeof document === 'undefined') return null;
+  // 2x2 twill weave: tows run in diagonal steps, each lit along its length so the
+  // weave flips between light and dark as the car turns (with the clearcoat on top)
+  const N = 128;
+  const tow = 8;
   const c = document.createElement('canvas');
-  c.width = c.height = 64;
+  c.width = c.height = N;
   const g = c.getContext('2d');
   if (!g) return null;
-  for (let y = 0; y < 64; y += 8) {
-    for (let x = 0; x < 64; x += 8) {
-      const odd = ((x + y) / 8) % 2 === 0;
-      const grad = g.createLinearGradient(x, y, x + (odd ? 8 : 0), y + (odd ? 0 : 8));
-      grad.addColorStop(0, '#16181c');
-      grad.addColorStop(0.5, '#2c3036');
-      grad.addColorStop(1, '#16181c');
+  g.fillStyle = '#0c0d10';
+  g.fillRect(0, 0, N, N);
+  for (let j = 0; j < N / tow; j++) {
+    for (let i = 0; i < N / tow; i++) {
+      const warp = Math.floor((i + j) / 2) % 2 === 0;
+      const x = i * tow;
+      const y = j * tow;
+      const grad = warp ? g.createLinearGradient(x, y, x + tow, y) : g.createLinearGradient(x, y, x, y + tow);
+      grad.addColorStop(0, '#0e1013');
+      grad.addColorStop(0.35, warp ? '#3a3f47' : '#22262c');
+      grad.addColorStop(0.65, warp ? '#2e333a' : '#1a1d22');
+      grad.addColorStop(1, '#0e1013');
       g.fillStyle = grad;
-      g.fillRect(x, y, 8, 8);
+      g.fillRect(x + 0.5, y + 0.5, tow - 1, tow - 1);
     }
   }
   const t = new CanvasTexture(c);
   t.wrapS = t.wrapT = RepeatWrapping;
+  // the cockpit maps it by UV at this repeat; the body samples it triplanar
   t.repeat.set(6, 6);
+  t.anisotropy = 4;
   t.colorSpace = SRGBColorSpace;
+  return t;
+}
+
+/** Fine grain for black plastic so it reads as moulded trim, not flat paint. */
+function grainTexture(): Texture | null {
+  if (typeof document === 'undefined') return null;
+  const N = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = N;
+  const g = c.getContext('2d');
+  if (!g) return null;
+  const img = g.createImageData(N, N);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (let i = 0; i < N * N; i++) {
+    const v = 150 + rnd() * 105;
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v;
+    img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new CanvasTexture(c);
+  t.wrapS = t.wrapT = RepeatWrapping;
   return t;
 }
 
@@ -72,14 +109,146 @@ function shadowTexture(): Texture | null {
   return new CanvasTexture(c);
 }
 
+
+/**
+ * Tyre textures laid out on the tyre's UVs (see tireGeometry): u around the
+ * tyre, v across the profile with the outer sidewall at the bottom of the
+ * canvas, the tread in the middle and the inner sidewall at the top.
+ */
+function tireTextures(): { map: Texture; bump: Texture; rough: Texture } | null {
+  if (typeof document === 'undefined') return null;
+  const Wd = 2048;
+  const H = 512;
+  const mk = () => {
+    const c = document.createElement('canvas');
+    c.width = Wd;
+    c.height = H;
+    return [c, c.getContext('2d')!] as const;
+  };
+  const [cm, gm] = mk();
+  const [cb, gb] = mk();
+  const [cr, gr] = mk();
+  if (!gm || !gb || !gr) return null;
+  // canvas y for a profile v (flipY puts v = 0 at the bottom)
+  const Y = (v: number) => H * (1 - v);
+  const band = (g: CanvasRenderingContext2D, v0: number, v1: number, fill: string) => {
+    g.fillStyle = fill;
+    g.fillRect(0, Y(v1), Wd, Y(v0) - Y(v1));
+  };
+  // base: satin sidewalls, matte tread
+  band(gm, 0, 1, '#1b1b1d');
+  band(gb, 0, 1, '#808080');
+  band(gr, 0, 1, '#b8b8b8');
+  band(gr, 0.33, 0.67, '#f0f0f0');
+  // rim protector rib and a fine ring just under the shoulder, both sides
+  for (const [v0, v1] of [[0.025, 0.05], [0.27, 0.278], [0.722, 0.73], [0.95, 0.975]] as const) {
+    band(gb, v0, v1, '#c8c8c8');
+    band(gr, v0, v1, '#9a9a9a');
+  }
+  // tread: raised blocks cut by two circumferential grooves, directional sipes and shoulder slots
+  band(gb, 0.33, 0.67, '#d8d8d8');
+  band(gm, 0.33, 0.67, '#1a1a1b');
+  gb.fillStyle = '#202020';
+  for (const vc of [0.44, 0.56]) gb.fillRect(0, Y(vc + 0.012), Wd, Y(vc - 0.012) - Y(vc + 0.012));
+  const pitch = Wd / 72;
+  gb.strokeStyle = '#303030';
+  for (let i = 0; i < 72; i++) {
+    const x = i * pitch;
+    // centre rib: thin angled sipes
+    gb.lineWidth = 3;
+    gb.beginPath();
+    gb.moveTo(x, Y(0.452));
+    gb.lineTo(x + pitch * 0.45, Y(0.548));
+    gb.stroke();
+    // the outer blocks: wide slots running out over the shoulders, slanted the same way on both sides
+    gb.lineWidth = 7;
+    for (const [va, vb] of [[0.43, 0.33], [0.57, 0.67]] as const) {
+      gb.beginPath();
+      gb.moveTo(x + pitch * 0.15, Y(va));
+      gb.lineTo(x + pitch * 0.55, Y(vb));
+      gb.stroke();
+    }
+  }
+  // outer sidewall lettering: raised, a touch lighter and glossier than the rubber round it
+  const words = ['HYPERDRIFT', 'SPORT R  ·  275/35 ZR20  ·  98Y'];
+  const vText = 0.155;
+  for (let k = 0; k < 4; k++) {
+    const txt = words[k % 2];
+    const size = k % 2 === 0 ? 46 : 26;
+    const cx = (k + 0.5) * (Wd / 4);
+    for (const [g, fill] of [[gm, '#4a4a4e'], [gb, '#e8e8e8'], [gr, '#7a7a7a']] as const) {
+      g.save();
+      g.font = `${k % 2 === 0 ? '900 italic' : '700'} ${size}px sans-serif`;
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.fillStyle = fill;
+      g.translate(cx, Y(vText));
+      // stretch the letters along the tyre: u covers the whole circumference
+      g.scale(1.6, 1);
+      g.fillText(txt, 0, 0);
+      g.restore();
+    }
+  }
+  const map = new CanvasTexture(cm);
+  map.colorSpace = SRGBColorSpace;
+  const bump = new CanvasTexture(cb);
+  const rough = new CanvasTexture(cr);
+  for (const t of [map, bump, rough]) {
+    t.wrapS = RepeatWrapping;
+    t.anisotropy = 4;
+  }
+  return { map, bump, rough };
+}
+
+/**
+ * Sample a material's map (or roughness map) triplanar in car space, so the
+ * texture lies evenly on any generated or conformed part without UVs.
+ */
+function triplanar<T extends MeshStandardMaterial>(mat: T, scale: number, key: string): T {
+  const which = mat.map ? 'map' : 'roughnessMap';
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTriScale = { value: scale };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTriPos;\nvarying vec3 vTriN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvTriPos = position;\nvTriN = normal;');
+    const sample = `vec4 triSample(sampler2D t) {
+      vec3 w = pow(abs(normalize(vTriN)), vec3(4.0));
+      w /= (w.x + w.y + w.z);
+      vec3 p = vTriPos * uTriScale;
+      return texture2D(t, p.zy) * w.x + texture2D(t, p.xz) * w.y + texture2D(t, p.xy) * w.z;
+    }`;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>\nuniform float uTriScale;\nvarying vec3 vTriPos;\nvarying vec3 vTriN;\n${sample}`);
+    if (which === 'map') {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', 'diffuseColor *= triSample(map);');
+    } else {
+      shader.fragmentShader = shader.fragmentShader.replace('#include <roughnessmap_fragment>', 'float roughnessFactor = roughness * triSample(roughnessMap).g;');
+    }
+  };
+  mat.customProgramCacheKey = () => `hyperdrift-tri-${key}`;
+  return mat;
+}
+
 export function getSharedMaterials(): SharedMaterials {
   if (shared) return shared;
   shared = {
-    trim: new MeshStandardMaterial({ color: 0x0d0f12, roughness: 0.55, metalness: 0.2 }),
-    carbon: new MeshStandardMaterial({ color: 0x9aa0a8, map: carbonTexture(), roughness: 0.32, metalness: 0.2 }),
-    chrome: new MeshStandardMaterial({ color: 0xe8edf2, roughness: 0.12, metalness: 1 }),
-    glass: new MeshStandardMaterial({ color: 0x05080d, roughness: 0.04, metalness: 0.9, envMapIntensity: 1.6 }),
-    tire: new MeshStandardMaterial({ color: 0x141414, roughness: 0.92, metalness: 0 }),
+    // satin black trim (window surrounds, grille frames, housings): a soft sheen that shows its shape
+    trim: new MeshStandardMaterial({ color: 0x121418, roughness: 0.42, metalness: 0.35 }),
+    // twill carbon under a thick clearcoat
+    carbon: triplanar(new MeshPhysicalMaterial({ color: 0xffffff, map: carbonTexture(), roughness: 0.38, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.05 }), 2.2, 'carbon'),
+    chrome: new MeshStandardMaterial({ color: 0xf2f5f8, roughness: 0.06, metalness: 1, envMapIntensity: 1.2 }),
+    // tinted glass: a dark dielectric, so it mirrors the sky at grazing angles and goes deep smoked-black head on
+    glass: new MeshPhysicalMaterial({ color: 0x0a0f16, roughness: 0.02, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.01, envMapIntensity: 1.8, specularIntensity: 1 }),
+    tire: (() => {
+      const t = tireTextures();
+      return new MeshStandardMaterial({ color: t ? 0xffffff : 0x17171a, map: t?.map ?? null, bumpMap: t?.bump ?? null, bumpScale: 1.4, roughnessMap: t?.rough ?? null, roughness: t ? 1 : 0.88, metalness: 0 });
+    })(),
+    // polished dark reflector bowls behind every lamp
+    housing: new MeshStandardMaterial({ color: 0x3a3e45, roughness: 0.14, metalness: 1 }),
+    // clear lamp cover: barely there head on, a bright sky reflection at the edges
+    lens: new MeshPhysicalMaterial({ color: 0xffffff, roughness: 0, metalness: 0, transparent: true, opacity: 0.16, depthWrite: false, envMapIntensity: 2.2, clearcoat: 1, clearcoatRoughness: 0 }),
+    // red tail-lamp bed: deep glossy red when off, under the lit elements
+    tailLens: new MeshPhysicalMaterial({ color: 0x4a0309, emissive: new Color(0.16, 0.0, 0.008), roughness: 0.08, metalness: 0.1, clearcoat: 1, clearcoatRoughness: 0, envMapIntensity: 1.4 }),
+    plastic: triplanar(new MeshStandardMaterial({ color: 0x1b1d21, roughness: 0.85, metalness: 0, roughnessMap: grainTexture() }), 9, 'plastic'),
     headlight: new MeshBasicMaterial({ color: new Color(5, 5.2, 5.6) }),
     brake: new MeshStandardMaterial({ color: 0x55585c, roughness: 0.45, metalness: 0.9 }),
     caliper: new MeshStandardMaterial({ color: 0xd4141c, roughness: 0.35, metalness: 0.3 }),
@@ -171,7 +340,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
   paint.customProgramCacheKey = () => 'hyperdrift-paint-v4';
 
   const rim = new MeshStandardMaterial({ color: 0xd5dae0, roughness: 0.22, metalness: 1 });
-  const tail = new MeshBasicMaterial({ color: new Color(1.6, 0.05, 0.08) });
+  const tail = new MeshBasicMaterial({ color: new Color(1.5, 0.012, 0.02) });
   const flame = new MeshBasicMaterial({
     color: new Color(0.35, 0.8, 2.2),
     transparent: true,
@@ -195,7 +364,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
     flame,
     setBrake(on: number) {
       const k = 1.6 + on * 3.5;
-      tail.color.setRGB(k, 0.05 + on * 0.1, 0.08);
+      tail.color.setRGB(k, 0.012 + on * 0.06, 0.02);
     },
     setPaint(b: CarBuild) {
       const base = paintById(b.paint);
