@@ -181,6 +181,10 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
     ['glass', shared.glass],
     ['light', shared.headlight],
     ['tail', mats.tail],
+    ['housing', shared.housing],
+    ['plastic', shared.plastic],
+    ['tailLens', shared.tailLens],
+    ['lens', shared.lens],
   ];
   const owned: BufferGeometry[] = [];
   for (const [key, mat] of table) {
@@ -233,6 +237,7 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
   const rim = rimGeometry(build.rims);
   const rimMain = mergeAll(rim.main.map(toWheel));
   const rimAccent = mergeAll([...rim.accent, brakes.holes].map(toWheel));
+  const rimPolish = mergeAll(rim.polish.map(toWheel));
   const disc = mergeAll([toWheel(brakes.disc)]);
   const caliper = mergeAll([toWheel(brakes.caliper)]);
   const spinning: InstancedMesh[] = [];
@@ -248,6 +253,7 @@ export function buildCar(build: CarBuild, opts: { ghost?: boolean } = {}): CarVi
   addInst(tire, shared.tire, spinning);
   addInst(rimMain, mats.rim, spinning);
   addInst(rimAccent, shared.trim, spinning);
+  addInst(rimPolish, shared.chrome, spinning);
   addInst(disc, shared.brake, spinning);
   addInst(caliper, shared.caliper, fixed);
 

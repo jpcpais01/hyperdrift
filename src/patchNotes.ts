@@ -6,6 +6,14 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-17 20:00 UTC',
+    entries: [
+      'Big exterior detail pass on every car part. Headlights and tail lights are now real lamp units with polished reflectors, lit elements and clear lenses, and the glass is dark tinted and reflective.',
+      'New tyres with moulded tread, rounded sidewalls and HYPERDRIFT lettering. Every rim design was rebuilt with shaped spokes, a machined chrome lip and proper lug nuts.',
+      'Exhausts now sit in black cut-outs in the bumper, side skirts follow each body\'s wheel arches, and hood vents, intakes and canards are moulded into the panels instead of stuck on top. Carbon has a real twill weave and wings use a proper airfoil profile.',
+    ],
+  },
+  {
     hour: '2026-10-16 20:00 UTC',
     entries: [
       'Skyway Prime has been rebuilt from the ground up as a 4.6 km lap high above the clouds. Climb a suspension bridge to the crest, then fly off the edge on the new sky dive, a ski-jump drop through two glowing halos. Sweep round a steeply banked hairpin that circles a forest island with waterfalls pouring off its cliffs, and spiral up a helix around a giant crystal spire.',
