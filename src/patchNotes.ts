@@ -9,6 +9,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
     hour: '2026-10-17 22:00 UTC',
     entries: [
       'New sound mixer: volume bars for Master, Engines, Effects and Interface in Settings and in the pause menu (under "Som"). Drag or tap the bars, or push left and right with keys or a gamepad, and hear each one change as you go. Your mix is saved.',
+      'Crash sounds are back, reworked: a short low thud with a crunch of crumpling metal that scales with the hit, and a quick tinkle when glass breaks. Hard hits throw a few sparks and broken windows a little glass, nothing over the top.',
       'Crash sounds and hit effects are switched off for now while they are reworked: no more crunch, glass and explosion sounds, impact sparks and shards, the extra camera shake and phone rumble on big hits, or slow motion when your car is wrecked. Dents, loose and flying panels, smoke and fire stay.',
     ],
   },
