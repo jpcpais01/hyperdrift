@@ -35,6 +35,7 @@ import {
   ShaderChunk,
   Skeleton,
   SkinnedMesh,
+  ShaderMaterial,
   SphereGeometry,
   SRGBColorSpace,
   Vector3,
@@ -56,6 +57,7 @@ import {
   mirrorPart,
   shifterPart,
   wheelPart,
+  windscreenGeometry,
   type CockpitLayout,
   type IBucket,
   type IBuckets,
@@ -92,6 +94,7 @@ interface ShadeUniforms {
   uSunL: { value: Vector3 };
   uCab0: { value: [number, number, number, number] };
   uCab1: { value: [number, number, number, number] };
+  uCab2: { value: [number, number, number, number] };
 }
 
 const SHADE_VERT_HEAD = /* glsl */ `
@@ -103,7 +106,21 @@ const SHADE_FRAG_HEAD = /* glsl */ `
 uniform vec3 uSunL;
 uniform vec4 uCab0; // roofY, beltY, halfW, zCowl
 uniform vec4 uCab1; // zRoofFront, zRoofRear, zB, zBack
+uniform vec4 uCab2; // floorY, dashTop, zFace, roofW
 varying vec3 vCab;
+// Sky light reaches the cabin through the glass: the deeper a point sits in the tub (below the
+// belt, under the dash, against the door) the less of the sky it sees. Smooth, per pixel.
+float cabinAO(vec3 p) {
+  float belt = uCab0.y;
+  float k = mix(0.4, 1.0, smoothstep(uCab2.x - 0.02, belt + 0.06, p.y));
+  float under = smoothstep(uCab2.z - 0.1, uCab2.z + 0.25, p.z) * (1.0 - smoothstep(uCab2.y - 0.22, uCab2.y - 0.03, p.y));
+  k *= 1.0 - 0.5 * under;
+  float wall = smoothstep(uCab0.z - 0.28, uCab0.z, abs(p.x)) * (1.0 - smoothstep(belt - 0.06, belt + 0.02, p.y));
+  k *= 1.0 - 0.28 * wall;
+  float edge = smoothstep(uCab0.x - 0.22, uCab0.x - 0.02, p.y) * smoothstep(uCab2.w * 0.55, uCab2.w, abs(p.x));
+  k *= 1.0 - 0.3 * edge;
+  return clamp(k, 0.18, 1.0);
+}
 // Sunlight only reaches a point inside the cabin if the ray towards the sun
 // leaves through glass: the windscreen, the rear screen or a side window.
 float cabinSun(vec3 p) {
@@ -203,7 +220,16 @@ function cabinMaterial(
       .replace('#include <project_vertex>', '#include <project_vertex>\n\tvCab = (uCarInv * modelMatrix * vec4(transformed, 1.0)).xyz;');
     let frag = sh.fragmentShader
       .replace('#include <common>', `#include <common>\n${SHADE_FRAG_HEAD}`)
-      .replace('#include <lights_fragment_begin>', LIGHTS_PATCHED);
+      .replace('#include <lights_fragment_begin>', LIGHTS_PATCHED)
+      .replace(
+        '#include <aomap_fragment>',
+        `#include <aomap_fragment>
+  {
+    float cAO = cabinAO(vCab);
+    reflectedLight.indirectDiffuse *= cAO;
+    reflectedLight.indirectSpecular *= mix(1.0, cAO, 0.8);
+  }`,
+      );
     if (grain) {
       frag = `#define GRAIN ${GRAIN_KIND[grain.kind]}\n` + frag;
       frag = frag
@@ -239,6 +265,46 @@ function cabinMaterial(
   m.customProgramCacheKey = () => 'cabin-sun-' + (grain ? `${grain.kind}-${grain.bump}-${grain.rough ?? 0.3}-${grain.tint ?? 0.08}` : 'plain');
   return m;
 }
+
+const WINDSCREEN_VERT = /* glsl */ `
+varying vec3 vW;
+varying vec3 vN;
+varying vec2 vUv;
+void main() {
+  vec4 w = modelMatrix * vec4(position, 1.0);
+  vW = w.xyz;
+  vN = normalize(mat3(modelMatrix) * normal);
+  vUv = uv;
+  gl_Position = projectionMatrix * viewMatrix * w;
+}
+`;
+
+const WINDSCREEN_FRAG = /* glsl */ `
+uniform vec3 uSun;
+uniform vec3 uTint;
+varying vec3 vW;
+varying vec3 vN;
+varying vec2 vUv;
+void main() {
+  vec3 v = normalize(cameraPosition - vW);
+  vec3 n = normalize(vN);
+  if (dot(n, v) < 0.0) n = -n;
+  float fres = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 3.0);
+  vec3 r = reflect(-v, n);
+  // the sky as the glass sees it, and a hard glint where it catches the sun
+  vec3 sky = mix(vec3(0.55, 0.6, 0.72), vec3(0.32, 0.42, 0.66), clamp(r.y, 0.0, 1.0));
+  float glint = pow(max(dot(r, normalize(uSun)), 0.0), 900.0) * 6.0 + pow(max(dot(r, normalize(uSun)), 0.0), 40.0) * 0.12;
+  // sun strip across the top, fading down into clear glass; edges a touch darker (frit)
+  float band = smoothstep(0.6, 0.88, vUv.y);
+  float frit = 1.0 - smoothstep(0.0, 0.035, min(vUv.x, 1.0 - vUv.x)) + 1.0 - smoothstep(0.0, 0.03, vUv.y);
+  float a = 0.03 + fres * 0.3 + band * 0.62 + frit * 0.7;
+  vec3 c = mix(uTint, sky, clamp(fres * 2.5, 0.0, 1.0));
+  c = mix(c, vec3(0.02), clamp(frit, 0.0, 1.0));
+  c += glint;
+  gl_FragColor = vec4(c, clamp(a + glint * 0.5, 0.0, 0.95));
+  #include <colorspace_fragment>
+}
+`;
 
 function woodTexture(): Texture | null {
   if (typeof document === 'undefined') return null;
@@ -363,6 +429,7 @@ export class Cockpit {
       uSunL: { value: new Vector3(0, 1, 0) },
       uCab0: { value: [f.roofY - 0.02, f.beltY, f.halfW - 0.01, f.zCowl] },
       uCab1: { value: [f.zRoofFront, f.zRoofRear, f.zB, f.zBack + 0.15] },
+      uCab2: { value: [L.floorY, L.dashTop, L.zFace, f.roofW] },
     };
 
     // --- lights: same sun and sky as the world, plus the baked environment for reflections
@@ -442,6 +509,24 @@ export class Cockpit {
       this.root.add(im);
     }
 
+    // --- the windscreen's inner face: a tinted sun strip at the top, the sky caught at grazing
+    // angles and the sun's glint; it hardly tints the road
+    const ws = new Mesh(
+      this.geo(windscreenGeometry(L)),
+      this.own(
+        new ShaderMaterial({
+          uniforms: { uSun: { value: SUN_DIR }, uTint: { value: new Color(style === 'future' ? 0x1a2a3a : 0x14263a) } },
+          vertexShader: WINDSCREEN_VERT,
+          fragmentShader: WINDSCREEN_FRAG,
+          transparent: true,
+          depthWrite: false,
+          side: DoubleSide,
+        }),
+      ),
+    );
+    ws.renderOrder = 2;
+    this.root.add(ws);
+
     // --- steering wheel on its column
     const wg = wheelPart(build.wheel);
     this.grip = wg.grip;
@@ -460,7 +545,7 @@ export class Cockpit {
     this.addBuckets(this.shifter, this.shifterGeo.base, (p) => this.ao(p.add(L.shifter)));
     this.addBuckets(this.shifterLever, this.shifterGeo.lever, (p) => this.ao(p.add(L.shifter)));
     this.root.add(this.shifter);
-    this.brakeGeo = handbrakePart(build.handbrake);
+    this.brakeGeo = handbrakePart(build.handbrake, L.leverScale);
     this.brake.position.copy(L.handbrake);
     this.brake.add(this.brakeLever);
     this.addBuckets(this.brake, this.brakeGeo.base, (p) => this.ao(p.add(L.handbrake)));
@@ -586,7 +671,8 @@ export class Cockpit {
     if (p.y < L.dashTop - 0.04) k *= 1 - 0.45 * sm(L.zFace - 0.05, L.zFace + 0.3, p.z);
     // corners where the headliner meets the pillars
     if (p.y > f.beltY + 0.1) k *= 1 - 0.25 * sm(f.roofW * 0.55, f.roofW, Math.abs(p.x));
-    return Math.max(0.25, Math.min(1, k));
+    // the broad falloff is shaded per pixel (cabinAO); the vertices keep only a soft contact term
+    return 1 - (1 - Math.max(0.25, Math.min(1, k))) * 0.45;
   }
 
   private withAO(g: BufferGeometry, fn: ((p: Vector3) => number) | null): BufferGeometry {

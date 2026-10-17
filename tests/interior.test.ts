@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Box3, Vector3, type BufferGeometry } from 'three';
+import { Box3, DoubleSide, Mesh, MeshBasicMaterial, Raycaster, Vector3, type BufferGeometry } from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { cabinBase, cockpitLayout, dashPart, handbrakePart, mirrorPart, shifterPart, wheelPart, type IBuckets } from '../src/car/interiorGeometry';
 import { INTERIOR_PARTS } from '../src/car/interiorParts';
 import { DEFAULT_BUILD, VISUAL_PARTS } from '../src/car/parts';
@@ -72,6 +73,43 @@ describe('cockpit', () => {
     }
   });
 
+  it('the driver can see every screen and dial, and the levers stay low', () => {
+    const mat = new MeshBasicMaterial({ side: DoubleSide });
+    const rc = new Raycaster();
+    for (const body of VISUAL_PARTS.body) {
+      const L = cockpitLayout(body.id);
+      for (const cockpit of INTERIOR_PARTS.cockpit) {
+        for (const dash of INTERIOR_PARTS.dash) {
+          const build = { ...DEFAULT_BUILD, body: body.id, cockpit: cockpit.id, dash: dash.id };
+          const d = dashPart(build, L);
+          const geos = [...all(cabinBase(build, L)), ...all(d.buckets)].map((g) => {
+            const n = g.index ? g.toNonIndexed() : g;
+            for (const k of Object.keys(n.attributes)) if (k !== 'position') n.deleteAttribute(k);
+            return n;
+          });
+          const solid = new Mesh(mergeGeometries(geos), mat);
+          for (const [i, sg] of d.screens.entries()) {
+            sg.computeBoundingBox();
+            const c = sg.boundingBox!.getCenter(new Vector3());
+            const dir = c.clone().sub(L.eye);
+            const dist = dir.length();
+            rc.set(L.eye, dir.normalize());
+            rc.far = dist - 0.015;
+            const hit = rc.intersectObject(solid)[0];
+            expect(hit?.point.toArray().map((v) => +v.toFixed(3)), `${body.id}/${cockpit.id}/${dash.id} screen ${i} hidden`).toBeUndefined();
+          }
+        }
+      }
+      // gear lever and handbrake tops sit well below the eye: out of the view of the road
+      for (const id of INTERIOR_PARTS.handbrake.map((o) => o.id)) {
+        const g = handbrakePart(id, L.leverScale);
+        const top = g.grip.clone().add(L.handbrake);
+        const down = Math.atan2(L.eye.y - top.y - 0.05, top.z - L.eye.z);
+        expect(down, `${body.id}/${id}`).toBeGreaterThan(0.45);
+      }
+    }
+  });
+
   it('the steering wheel clears the dash and the driver can reach the levers', () => {
     for (const body of VISUAL_PARTS.body) {
       const L = cockpitLayout(body.id);
@@ -95,7 +133,7 @@ describe('cockpit', () => {
         expect(L.shoulderR.distanceTo(g.grip.clone().add(L.shifter)), `${body.id}/${id}`).toBeLessThan(reach);
       }
       for (const id of INTERIOR_PARTS.handbrake.map((o) => o.id)) {
-        const g = handbrakePart(id);
+        const g = handbrakePart(id, L.leverScale);
         expect(L.shoulderR.distanceTo(g.grip.clone().add(L.handbrake)), `${body.id}/${id}`).toBeLessThan(reach);
       }
       for (const m of INTERIOR_PARTS.mirror) {
