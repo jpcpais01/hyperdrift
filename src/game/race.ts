@@ -184,7 +184,6 @@ export class Race {
   readonly crash: CrashSystem;
   private byPhysics = new Map<CarPhysics, RaceCar>();
   /** a moment of slow motion when the player is wrecked (offline only) */
-  private slowmo = 0;
   private sendCount = 0;
   onFinish: ((r: RaceResult) => void) | null = null;
 
@@ -436,11 +435,6 @@ export class Race {
     if (this.paused) {
       this.updateVisuals(0);
       return;
-    }
-    if (this.slowmo > 0) {
-      // the wreck plays out slowly, then time catches up
-      this.slowmo -= dt;
-      dt *= 0.28 + 0.72 * Math.max(0, Math.min(1, 1 - this.slowmo / 0.5));
     }
     const racing = this.countdown <= 0;
 
@@ -888,14 +882,9 @@ export class Race {
     }
   }
 
-  /** The player's car took a hit: the camera, the phone and the HUD feel it. */
+  /** The player's car was totaled: say so on the HUD. */
   private onPlayerCrash(r: ImpactResult) {
-    this.chase.addShake(0.15 + r.severity * 1.3);
-    if (r.severity > 0.12 && isTouch()) navigator.vibrate?.(r.totaled ? [60, 40, 140] : Math.round(20 + r.severity * 60));
-    if (r.totaled) {
-      this.hud?.message('DESTRUÍDO!', 2.4, 'big');
-      if (!this.net) this.slowmo = 1.5;
-    }
+    if (r.totaled) this.hud?.message('DESTRUÍDO!', 2.4, 'big');
   }
 
   private onPlayerLap(lapTime: number) {

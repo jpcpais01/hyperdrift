@@ -20,7 +20,7 @@ export interface CrashCar {
 
 /** What the mode does about crashes it cares about. */
 export interface CrashHooks {
-  /** the player's car took a hit (shake, rumble, a word on the HUD) */
+  /** the player's car took a hit (a word on the HUD when it is totaled) */
   playerHit?(r: ImpactResult, speed: number): void;
   /** a wreck has burned long enough: put the car back on the road (it is repaired right after) */
   recover(car: CrashCar): void;
@@ -82,7 +82,6 @@ const W = new Vector3();
 const M = new Matrix4();
 const Q = new Quaternion();
 const S = new Vector3();
-const UP = new Vector3(0, 1, 0);
 
 interface CarState {
   lastHit: number;
@@ -188,44 +187,18 @@ export class CrashSystem {
     st.lastSpeed = speed;
     const at = rig.resolve(point, dir, P);
     const res = d.hit(at, dir, speed, scrape);
-    this.react(car, res, at, speed);
+    this.react(car, res, speed);
   }
 
-  /** Everything a hit shows and sounds like. `at` is car space. */
-  private react(car: CrashCar, res: ImpactResult, at: Vector3 | null, speed: number) {
-    const p = car.physics;
+  /** What a hit does to the car's look: the panels shake, parts come off. */
+  private react(car: CrashCar, res: ImpactResult, speed: number) {
     const v = car.visual;
     const rig = v.damage!;
     v.body.updateWorldMatrix(true, false);
     rig.kick(0.3 + res.severity);
-    const world = at ? W.copy(at).applyMatrix4(v.body.matrixWorld) : W.copy(p.pos).addScaledVector(p.up, 0.6);
-    const near = Math.max(0, 1 - world.distanceTo(this.camera) / 90);
-    const loud = car.isPlayer ? 1 : near * near;
-    if (res.severity > 0.04 && loud > 0.02) audio.crash(Math.min(1, res.severity * 1.4) * (0.35 + 0.65 * loud));
-    if (res.glass) {
-      if (loud > 0.02) audio.glass(res.severity * loud + 0.2);
-      this.shards(world, p.vel, 14 + Math.round(res.severity * 20));
-    }
-    if (res.lights) this.shards(world, p.vel, 8);
-    // chips of paint and plastic off the panel
-    if (res.severity > 0.15) {
-      for (let k = 0; k < 6 + res.severity * 12; k++) {
-        D.set(Math.random() - 0.5, Math.random() * 0.8, Math.random() - 0.5).multiplyScalar(6 + res.severity * 8).add(p.vel);
-        this.sparks.emit(world, D, k % 2 ? SPARK : SPARK_HOT, 1, 0.07 + Math.random() * 0.06, 0.3 + Math.random() * 0.3, 0, 1.5);
-      }
-    }
     for (const part of res.detached) this.throwPart(car, part, speed);
     for (const w of res.wheels) if (car.damage!.wheels[w].gone) this.throwWheel(car, w);
-    if (res.detached.length && loud > 0.02) setTimeout(() => audio.clatter(0.4 + 0.6 * loud), 120);
-    if (res.totaled) this.explode(car, loud);
     if (car.isPlayer) this.hooks.playerHit?.(res, speed);
-  }
-
-  private shards(at: Vector3, vel: Vector3, n: number) {
-    for (let k = 0; k < n; k++) {
-      D.set(Math.random() - 0.5, Math.random() * 0.9 + 0.1, Math.random() - 0.5).multiplyScalar(5 + Math.random() * 5).addScaledVector(vel, 0.85);
-      this.sparks.emit(P.copy(at).addScaledVector(UP, 0.2), D, GLASS, 0.9, 0.035 + Math.random() * 0.04, 0.4 + Math.random() * 0.5, 0, 1.2);
-    }
   }
 
   /** A part comes off: it leaves from exactly where it hung, with the car's speed and a kick. */
@@ -258,25 +231,6 @@ export class CrashSystem {
     const spin = W.copy(p.right).multiplyScalar(-p.forwardSpeed / 0.34).addScaledVector(p.fwd, (Math.random() - 0.5) * 6);
     const r = v.wheelCentres[i][1];
     this.debris.add(g, pos, Q.copy(v.root.quaternion), vel, spin, S.set(0.14, r * 0.92, r * 0.92), p.trackIndex, () => {}, 0.45);
-  }
-
-  /** Totaled: the tank goes up. */
-  private explode(car: CrashCar, loud: number) {
-    const p = car.physics;
-    const c = P.copy(p.pos).addScaledVector(p.up, 0.7);
-    if (loud > 0.02) audio.explode(0.4 + 0.6 * loud);
-    for (let k = 0; k < 46; k++) {
-      D.set(Math.random() - 0.5, Math.random() * 0.8 + 0.2, Math.random() - 0.5).normalize().multiplyScalar(3 + Math.random() * 9).addScaledVector(p.vel, 0.6);
-      this.sparks.emit(P2.copy(c).addScaledVector(D, 0.05), D, k % 3 ? FIRE : FIRE_CORE, 1, 0.45 + Math.random() * 0.7, 0.35 + Math.random() * 0.5, 1.5, 2.6);
-    }
-    for (let k = 0; k < 26; k++) {
-      D.set(Math.random() - 0.5, Math.random() * 0.6 + 0.2, Math.random() - 0.5).multiplyScalar(18 + Math.random() * 12).addScaledVector(p.vel, 0.7);
-      this.sparks.emit(c, D, SPARK_HOT, 1, 0.08, 0.5 + Math.random() * 0.6, 0, 1.2);
-    }
-    for (let k = 0; k < 18; k++) {
-      D.set(Math.random() - 0.5, Math.random() * 0.5 + 0.3, Math.random() - 0.5).multiplyScalar(2 + Math.random() * 4).addScaledVector(p.vel, 0.5);
-      this.smoke.emit(P2.copy(c).addScaledVector(D, 0.2), D, BLACK, 0.75, 1.2 + Math.random() * 1.2, 2.6 + Math.random() * 1.6, 2.4, 2.4);
-    }
   }
 
   /** Good as new (respawns, the pause menu's restart, a wreck coming back). */
@@ -312,12 +266,8 @@ export class CrashSystem {
     const st = this.state.get(car);
     if (r.detached.length || r.wheels.length || r.totaled) {
       car.visual.body.updateWorldMatrix(true, false);
-      const loud = Math.max(0, 1 - car.physics.pos.distanceTo(this.camera) / 90) ** 2;
       for (const part of r.detached) this.throwPart(car, part, car.physics.speed);
       for (const w of r.wheels) this.throwWheel(car, w);
-      if (r.detached.length && loud > 0.02) audio.clatter(0.4 + 0.6 * loud);
-      if (r.totaled) this.explode(car, loud);
-      else if (loud > 0.02) audio.crash(0.5 * loud);
     }
     if (st) st.wasTotaled = d.totaled;
   }
