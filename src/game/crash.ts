@@ -187,15 +187,36 @@ export class CrashSystem {
     st.lastSpeed = speed;
     const at = rig.resolve(point, dir, P);
     const res = d.hit(at, dir, speed, scrape);
-    this.react(car, res, speed);
+    this.react(car, res, at, speed);
   }
 
-  /** What a hit does to the car's look: the panels shake, parts come off. */
-  private react(car: CrashCar, res: ImpactResult, speed: number) {
+  /**
+   * What a hit looks and sounds like, kept understated: a crunch only when
+   * metal actually gives, a few sparks off the panel on hard hits, a little
+   * glass when a window or lamp goes. `at` is car space.
+   */
+  private react(car: CrashCar, res: ImpactResult, at: Vector3 | null, speed: number) {
+    const p = car.physics;
     const v = car.visual;
     const rig = v.damage!;
     v.body.updateWorldMatrix(true, false);
     rig.kick(0.3 + res.severity);
+    const world = at ? W.copy(at).applyMatrix4(v.body.matrixWorld) : W.copy(p.pos).addScaledVector(p.up, 0.6);
+    const near = Math.max(0, 1 - world.distanceTo(this.camera) / 60);
+    const loud = car.isPlayer ? 1 : near * near;
+    if (res.severity > 0.08 && loud > 0.05) audio.crunch(Math.min(1, res.severity * 1.2) * (0.4 + 0.6 * loud), res.glass);
+    if (res.severity > 0.25) {
+      for (let k = 0; k < 3 + res.severity * 5; k++) {
+        D.set(Math.random() - 0.5, Math.random() * 0.6 + 0.1, Math.random() - 0.5).multiplyScalar(4 + res.severity * 4).addScaledVector(p.vel, 0.9);
+        this.sparks.emit(world, D, SPARK, 0.8, 0.05, 0.15 + Math.random() * 0.15, 0, 1.2);
+      }
+    }
+    if (res.glass || res.lights) {
+      for (let k = 0; k < (res.glass ? 8 : 4); k++) {
+        D.set(Math.random() - 0.5, Math.random() * 0.7 + 0.2, Math.random() - 0.5).multiplyScalar(3 + Math.random() * 3).addScaledVector(p.vel, 0.9);
+        this.sparks.emit(world, D, GLASS, 0.6, 0.03, 0.3 + Math.random() * 0.3, 0, 1.2);
+      }
+    }
     for (const part of res.detached) this.throwPart(car, part, speed);
     for (const w of res.wheels) if (car.damage!.wheels[w].gone) this.throwWheel(car, w);
     if (car.isPlayer) this.hooks.playerHit?.(res, speed);
@@ -268,6 +289,8 @@ export class CrashSystem {
       car.visual.body.updateWorldMatrix(true, false);
       for (const part of r.detached) this.throwPart(car, part, car.physics.speed);
       for (const w of r.wheels) this.throwWheel(car, w);
+      const near = Math.max(0, 1 - car.physics.pos.distanceTo(this.camera) / 60);
+      if (near > 0.2) audio.crunch((r.totaled ? 0.9 : 0.5) * near * near);
     }
     if (st) st.wasTotaled = d.totaled;
   }

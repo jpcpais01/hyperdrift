@@ -457,6 +457,44 @@ export class AudioSystem {
     this.burst(0.12 + 0.12 * k, 160, 0.35 * k, 'lowpass');
     this.burst(0.08 + 0.1 * k, 1600 + 900 * Math.random(), 0.22 * k);
   }
+  /**
+   * Bodywork giving way, 0..1: a soft low thud under a short granular crunch
+   * (crumpling sheet metal is many tiny clicks, not a tone), plus a brief
+   * scatter of high ticks when glass goes. Plays on top of the contact bump.
+   */
+  crunch(strength: number, glass = false) {
+    if (!this.ctx) return;
+    const k = Math.min(1, Math.max(0, strength));
+    this.burst(0.16 + 0.14 * k, 140, 0.22 * k + 0.05, 'lowpass', this.bus, 0.6);
+    const t0 = this.ctx.currentTime;
+    const grains = 3 + Math.round(k * 7);
+    let t = 0;
+    for (let i = 0; i < grains; i++) {
+      t += 0.008 + Math.random() * (0.012 + 0.02 * k);
+      this.grain(t0 + t, 0.012 + Math.random() * 0.025, 700 + Math.random() * 2600, 0.11 * (0.4 + 0.6 * k) * (1 - (i / grains) * 0.6), 'bandpass');
+    }
+    if (glass) {
+      for (let i = 0; i < 5; i++) this.grain(t0 + 0.01 + Math.random() * 0.18, 0.008 + Math.random() * 0.012, 4500 + Math.random() * 3500, 0.05 * (0.5 + 0.5 * k), 'highpass');
+    }
+  }
+  /** One short tick of filtered noise starting at `t` (context time). */
+  private grain(t: number, dur: number, freq: number, vol: number, type: BiquadFilterType) {
+    if (!this.ctx || vol <= 0.001) return;
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this.noise;
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.Q.value = type === 'bandpass' ? 2 + Math.random() * 3 : 0.7;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    src.connect(f).connect(g).connect(this.bus);
+    src.start(t, Math.random());
+    src.stop(t + dur + 0.01);
+  }
   /** bodywork grinding along another car */
   scrape(strength: number) {
     this.burst(0.09, 2400 + 1200 * Math.random(), 0.1 * Math.min(1, strength));
