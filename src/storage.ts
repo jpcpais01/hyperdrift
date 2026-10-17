@@ -5,6 +5,7 @@ import type { TiltSens } from './core/tilt';
 import type { CameraZoom } from './game/chaseCamera';
 import { DAMAGE_MODES, type DamageMode } from './car/damage';
 import type { GhostLap } from './game/ghost';
+import { DEFAULT_MIX, MIX_CHANNELS, type Mix } from './core/audio';
 
 export interface Settings {
   muted: boolean;
@@ -18,6 +19,8 @@ export interface Settings {
   resolution: RenderScale;
   /** Car damage: dents, parts and wrecks that change the handling, the looks only, or none. */
   damage: DamageMode;
+  /** Mixer: master, engines, effects and interface, each 0..1. */
+  volume: Mix;
 }
 
 const KEY_BUILD = 'hyperdrift.build.v1';
@@ -63,6 +66,7 @@ export const storage = {
       tiltCenter: 0,
       resolution: 'auto',
       damage: 'full',
+      volume: { ...DEFAULT_MIX },
       ...(get<Partial<Settings>>(KEY_SETTINGS) ?? {}),
     };
     if (s.camZoom !== 0 && s.camZoom !== 1 && s.camZoom !== 2 && s.camZoom !== 3) s.camZoom = 1;
@@ -71,6 +75,12 @@ export const storage = {
     if (typeof s.tiltCenter !== 'number' || !isFinite(s.tiltCenter) || Math.abs(s.tiltCenter) > 1.2) s.tiltCenter = 0;
     if (!RENDER_SCALES.includes(s.resolution)) s.resolution = 'auto';
     if (!DAMAGE_MODES.includes(s.damage)) s.damage = 'full';
+    const v: Partial<Mix> = s.volume && typeof s.volume === 'object' ? s.volume : {};
+    s.volume = { ...DEFAULT_MIX };
+    for (const k of MIX_CHANNELS) {
+      const x = v[k];
+      if (typeof x === 'number' && isFinite(x)) s.volume[k] = Math.round(Math.max(0, Math.min(1, x)) * 10) / 10;
+    }
     return s;
   },
   saveSettings: (s: Settings) => set(KEY_SETTINGS, s),

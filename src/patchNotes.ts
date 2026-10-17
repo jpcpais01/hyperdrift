@@ -6,6 +6,12 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-17 22:00 UTC',
+    entries: [
+      'New sound mixer: volume bars for Master, Engines, Effects and Interface in Settings and in the pause menu (under "Som"). Drag or tap the bars, or push left and right with keys or a gamepad, and hear each one change as you go. Your mix is saved.',
+    ],
+  },
+  {
     hour: '2026-10-17 21:00 UTC',
     entries: [
       'Cars now take real damage. Every hit dents and crumples the bodywork where it landed, scratches the paint down to primer and bare metal, cracks the glass into spider webs and smashes the lamps, on every body and part combination, rivals and online players included.',

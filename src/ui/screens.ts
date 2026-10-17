@@ -20,6 +20,8 @@ import { LAPS, type RaceResult } from '../game/race';
 import { MAX_PLAYERS } from '../net/protocol';
 import { formatScore, formatTime } from './hud';
 import { hint, nav } from './nav';
+import { VolumeBars, volumeRows } from './volume';
+import type { MixChannel } from '../core/audio';
 
 function h<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', html = ''): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -144,6 +146,9 @@ export class MenuScreen {
 
   /** Cycles the damage setting and returns the new label. */
   onDamage: (() => string) | null = null;
+  /** A volume bar moved. */
+  onVolume: ((ch: MixChannel, v: number) => void) | null = null;
+  readonly volume: VolumeBars;
 
   constructor(root: HTMLElement, muted: boolean, controlsLabel: string | null, resolutionLabel: string, damageLabel = 'DANOS: REALISTAS') {
     this.el = h('div', 'screen menu hidden');
@@ -183,6 +188,7 @@ export class MenuScreen {
               <span class="set-ico">${ICON_SOUND}</span><span class="set-txt"><b>Som</b><small>Motor, música e efeitos</small></span>
               <span class="switch${muted ? '' : ' on'}"><i></i></span>
             </button>
+            <div class="vol-group${muted ? ' muted' : ''}">${volumeRows(audio.mix)}</div>
             ${
               controlsLabel
                 ? `<button class="set-row" data-a="controls">
@@ -228,6 +234,7 @@ export class MenuScreen {
       </div>`;
     root.appendChild(this.el);
     this.hero = this.el.querySelector('.hero')!;
+    this.volume = new VolumeBars(this.el.querySelector('.settings .vol-group')!, (ch, v) => this.onVolume?.(ch, v));
     if (store(NOTES_SEEN) !== this.notesKey()) this.el.classList.add('notes-new');
 
     const upd = this.el.querySelector<HTMLButtonElement>('[data-a="update"]')!;
@@ -263,7 +270,7 @@ export class MenuScreen {
         return;
       }
       const b = target.closest('button');
-      if (!b) return;
+      if (!b || b.classList.contains('vol-row')) return;
       audio.click();
       const a = b.dataset.a;
       if (a === 'go') this.launch(this.sel);
@@ -281,10 +288,17 @@ export class MenuScreen {
       if (a === 'sound' && this.onToggleSound) {
         const m = this.onToggleSound();
         b.querySelector('.switch')!.classList.toggle('on', !m);
+        this.volume.setMuted(m);
       }
     });
     this.renderHero(false);
     this.el.querySelector(`.tile[data-mode="${this.sel}"]`)!.classList.add('on');
+  }
+
+  /** Sound on/off changed somewhere else (the pause menu). */
+  setMuted(m: boolean) {
+    this.el.querySelector('[data-a="sound"] .switch')!.classList.toggle('on', !m);
+    this.volume.setMuted(m);
   }
 
   private notesKey() {
@@ -901,8 +915,13 @@ export class PauseScreen {
   onTime: ((hour: number | null, running: boolean) => void) | null = null;
   private time: { hour: number; running: boolean; editable: boolean } | null = null;
   private dragging = false;
+  onToggleSound: (() => boolean) | null = null;
+  onVolume: ((ch: MixChannel, v: number) => void) | null = null;
+  /** the sound panel opened (true) or closed: the game lets the audio play while it's up */
+  onSoundPanel: ((open: boolean) => void) | null = null;
+  readonly volume: VolumeBars;
 
-  constructor(root: HTMLElement, withControls: boolean, resolutionLabel: string) {
+  constructor(root: HTMLElement, withControls: boolean, resolutionLabel: string, muted: boolean) {
     this.el = h('div', 'screen pause hidden');
     const row = (a: string, icon: string, label: string, extra = '') =>
       `<button class="prow" data-a="${a}"${extra}><span class="prow-ico">${icon}</span><span class="prow-label">${label}</span>${
@@ -915,6 +934,7 @@ export class PauseScreen {
           ${row('resume', ICON_PLAY, 'Continuar', ' data-autofocus data-back')}
           ${row('restart', ICON_RESTART, 'Recomeçar')}
           ${withControls ? row('controls', ICON_PAD, 'Controlos') : ''}
+          ${row('sound', ICON_SOUND, 'Som')}
           ${row('res', ICON_RES, 'Resolução')}
           ${row('quit', ICON_EXIT, 'Sair para o menu')}
         </div>
@@ -928,8 +948,20 @@ export class PauseScreen {
         <div class="pt-presets">${TIME_PRESETS.map(([hr, label]) => `<button class="pt-chip" data-h="${hr}">${label}</button>`).join('')}</div>
         <button class="pt-run" data-a="run"><span class="switch"><i></i></span><span class="pt-run-txt"><b>O tempo passa</b><small>Um dia inteiro em 16 minutos</small></span></button>
         <p class="pt-note">Só o anfitrião escolhe a hora · todos veem o mesmo céu</p>
-      </section>`;
+      </section>
+      <div class="sheet pause-sound hidden" data-modal>
+        <div class="sheet-card">
+          <header class="sheet-head"><h2>Som</h2><button class="sheet-x" data-a="sound-close" data-back aria-label="Fechar">✕</button></header>
+          <button class="set-row" data-a="mute" data-autofocus>
+            <span class="set-ico">${ICON_SOUND}</span><span class="set-txt"><b>Som</b><small>Liga ou desliga tudo</small></span>
+            <span class="switch${muted ? '' : ' on'}"><i></i></span>
+          </button>
+          <div class="vol-group${muted ? ' muted' : ''}">${volumeRows(audio.mix)}</div>
+          <footer class="sheet-hints">${hint('move', 'Ajustar')}${hint('back', 'Fechar')}</footer>
+        </div>
+      </div>`;
     root.appendChild(this.el);
+    this.volume = new VolumeBars(this.el.querySelector('.pause-sound .vol-group')!, (ch, v) => this.onVolume?.(ch, v));
     const slider = this.el.querySelector<HTMLInputElement>('.pt-slider')!;
     slider.addEventListener('input', () => {
       this.dragging = true;
@@ -937,9 +969,13 @@ export class PauseScreen {
     });
     slider.addEventListener('change', () => (this.dragging = false));
     this.el.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).classList.contains('pause-sound')) return this.soundPanel(false);
       const b = (e.target as HTMLElement).closest('button');
-      if (!b) return;
+      if (!b || b.classList.contains('vol-row')) return;
       audio.click();
+      if (b.dataset.a === 'sound') this.soundPanel(true);
+      if (b.dataset.a === 'sound-close') this.soundPanel(false);
+      if (b.dataset.a === 'mute' && this.onToggleSound) this.setMuted(this.onToggleSound());
       if (b.dataset.a === 'resume') this.onResume?.();
       if (b.dataset.a === 'restart') this.onRestart?.();
       if (b.dataset.a === 'quit') this.onQuit?.();
@@ -948,6 +984,20 @@ export class PauseScreen {
       if (b.dataset.a === 'run' && this.time?.editable) this.onTime?.(null, !this.time.running);
       if (b.dataset.h && this.time?.editable) this.onTime?.(Number(b.dataset.h), this.time.running);
     });
+  }
+
+  private soundPanel(open: boolean) {
+    const p = this.el.querySelector<HTMLElement>('.pause-sound')!;
+    if (p.classList.contains('hidden') !== open) return;
+    p.classList.toggle('hidden', !open);
+    this.onSoundPanel?.(open);
+    if (!open && !nav.usingPointer) this.el.querySelector<HTMLElement>('[data-a="sound"]')?.focus({ preventScroll: true });
+    requestAnimationFrame(() => nav.refocus());
+  }
+
+  setMuted(m: boolean) {
+    this.el.querySelector('[data-a="mute"] .switch')!.classList.toggle('on', !m);
+    this.volume.setMuted(m);
   }
 
   /** The drift zone's time-of-day card (null hides it). Cheap to call every frame. */
@@ -976,6 +1026,7 @@ export class PauseScreen {
 
   show(v: boolean) {
     this.el.classList.toggle('hidden', !v);
+    if (!v) this.soundPanel(false);
     if (v) requestAnimationFrame(() => nav.refocus());
   }
 

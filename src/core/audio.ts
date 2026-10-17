@@ -71,9 +71,9 @@ class EngineVoice {
     this.out.gain.value = this.base;
     if (spatial && typeof ctx.createStereoPanner === 'function') {
       this.panner = ctx.createStereoPanner();
-      this.out.connect(this.panner).connect(sys.bus);
+      this.out.connect(this.panner).connect(sys.engines);
     } else {
-      this.out.connect(sys.bus);
+      this.out.connect(sys.engines);
     }
     void sys.worklet.then((ok) => {
       if (this.stopped) return;
@@ -252,11 +252,26 @@ class EngineVoice {
   }
 }
 
+/** The mixer channels a player can turn up or down. */
+export type MixChannel = 'master' | 'engine' | 'sfx' | 'ui';
+export const MIX_CHANNELS: readonly MixChannel[] = ['master', 'engine', 'sfx', 'ui'];
+export type Mix = Record<MixChannel, number>;
+export const DEFAULT_MIX: Mix = { master: 1, engine: 1, sfx: 1, ui: 1 };
+/** loudness at full master volume (headroom for the compressor) */
+const MASTER = 0.55;
+/** slider position 0..1 to gain: squared, so the bars feel even to the ear */
+const curve = (v: number) => Math.max(0, Math.min(1, v)) ** 2;
+
 export class AudioSystem {
   ctx: Ctx | null = null;
   private master!: GainNode;
-  /** everything goes through here (then the master and a compressor) */
+  /** sound effects: tyres, wind, hits, boost, pickups (then the master and a compressor) */
   bus!: GainNode;
+  /** every engine voice, the player's and the rivals' */
+  engines!: GainNode;
+  /** menu clicks, countdown beeps, lap chimes */
+  ui!: GainNode;
+  mix: Mix = { ...DEFAULT_MIX };
   noise!: AudioBuffer;
   /** resolves to true once the engine worklet is loaded */
   worklet: Promise<boolean> = Promise.resolve(false);
@@ -275,12 +290,15 @@ export class AudioSystem {
     if (!AC) return;
     this.ctx = new AC({ latencyHint: 'interactive' });
     this.master = this.ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.55;
     this.bus = this.ctx.createGain();
+    this.engines = this.ctx.createGain();
+    this.ui = this.ctx.createGain();
     const comp = this.ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.ratio.value = 4;
-    this.bus.connect(this.master).connect(comp).connect(this.ctx.destination);
+    this.master.connect(comp).connect(this.ctx.destination);
+    for (const b of [this.bus, this.engines, this.ui]) b.connect(this.master);
+    this.applyMix(true);
     const len = this.ctx.sampleRate * 2;
     this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noise.getChannelData(0);
@@ -301,7 +319,37 @@ export class AudioSystem {
 
   setMuted(m: boolean) {
     this.muted = m;
-    if (this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.55, this.ctx.currentTime, 0.05);
+    this.applyMix();
+  }
+
+  /** Sets one mixer channel (0..1), or the whole mix; applied with a short glide. */
+  setMix(m: Partial<Mix>) {
+    for (const k of MIX_CHANNELS) {
+      const v = m[k];
+      if (typeof v === 'number' && isFinite(v)) this.mix[k] = Math.max(0, Math.min(1, v));
+    }
+    this.applyMix();
+  }
+
+  private applyMix(now = false) {
+    if (!this.ctx) return;
+    const t = this.ctx.currentTime;
+    const set = (g: GainNode, v: number) => (now ? (g.gain.value = v) : g.gain.setTargetAtTime(v, t, 0.04));
+    set(this.master, this.muted ? 0 : MASTER * curve(this.mix.master));
+    set(this.engines, curve(this.mix.engine));
+    set(this.bus, curve(this.mix.sfx));
+    set(this.ui, curve(this.mix.ui));
+  }
+
+  /** A short taste of a channel, played while its bar moves. */
+  preview(ch: MixChannel) {
+    if (!this.ctx) return;
+    if (ch === 'engine') {
+      // a quick blip of revs through the engine channel
+      this.tone(70, 0.4, 'sawtooth', 0.16, 2.4, this.engines);
+      this.tone(140, 0.3, 'square', 0.04, 2.2, this.engines);
+    } else if (ch === 'sfx') this.burst(0.3, 500, 0.22);
+    else this.tone(ch === 'ui' ? 1400 : 880, 0.09, 'triangle', 0.14, 1, this.ui);
   }
 
   noiseLoop(type: BiquadFilterType, freq: number, q: number, dest: AudioNode = this.bus) {
@@ -538,24 +586,24 @@ export class AudioSystem {
     this.burst(0.09, 2400 + 1200 * Math.random(), 0.1 * Math.min(1, strength));
   }
   beep(high = false) {
-    this.tone(high ? 1046 : 523, high ? 0.5 : 0.22, 'square', 0.12);
+    this.tone(high ? 1046 : 523, high ? 0.5 : 0.22, 'square', 0.12, 0, this.ui);
   }
   lap() {
-    this.tone(660, 0.12, 'triangle', 0.15);
-    setTimeout(() => this.tone(990, 0.25, 'triangle', 0.15), 100);
+    this.tone(660, 0.12, 'triangle', 0.15, 0, this.ui);
+    setTimeout(() => this.tone(990, 0.25, 'triangle', 0.15, 0, this.ui), 100);
   }
   click() {
-    this.tone(1400, 0.05, 'triangle', 0.08);
+    this.tone(1400, 0.05, 'triangle', 0.08, 0, this.ui);
   }
   /** soft tick as the menu focus moves */
   nav() {
-    this.tone(2600, 0.028, 'sine', 0.035);
+    this.tone(2600, 0.028, 'sine', 0.035, 0, this.ui);
   }
   /** title screen → home: a rising chime */
   start() {
-    this.tone(660, 0.18, 'sine', 0.09, 1.5);
-    this.tone(990, 0.32, 'sine', 0.06, 1.33);
-    this.burst(0.45, 900, 0.08);
+    this.tone(660, 0.18, 'sine', 0.09, 1.5, this.ui);
+    this.tone(990, 0.32, 'sine', 0.06, 1.33, this.ui);
+    this.burst(0.45, 900, 0.08, 'bandpass', this.ui);
   }
   whoosh() {
     this.burst(0.5, 400, 0.18);
