@@ -86,9 +86,9 @@ const ICON_GARAGE = `<svg viewBox="0 0 24 24"><path d="M3 20V9l9-5 9 5v11"/><pat
 
 const KEYMAP: [string, string][] = [
   ['↑ W', 'Acelerar'],
-  ['↓ S', 'Travar · marcha-atrás'],
+  ['↓ S Espaço', 'Travar · marcha-atrás'],
   ['← → A D', 'Virar'],
-  ['Espaço', 'Nitro'],
+  ['Shift N', 'Nitro'],
   ['C', 'Câmara'],
   ['Esc P', 'Pausa'],
 ];

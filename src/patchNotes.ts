@@ -6,6 +6,12 @@ export interface PatchNoteGroup {
 
 export const PATCH_NOTES: PatchNoteGroup[] = [
   {
+    hour: '2026-10-18 00:00 UTC',
+    entries: [
+      'New keyboard layout on PC: Space is now the brake (hold it to reverse once stopped) and either Shift fires the nitro. S and the down arrow still brake, and N still fires nitro too. The controls list in the menu shows the new keys.',
+    ],
+  },
+  {
     hour: '2026-10-17 23:00 UTC',
     entries: [
       "Hyper Cunha and Protótipo windscreens now flow down into the hood: the glass no longer stands on the low hood like a wall with a gap under it, and the dark wheel-well patches that showed through the hood are gone. Every hood option fits cleanly on every body.",

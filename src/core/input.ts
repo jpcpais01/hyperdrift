@@ -14,7 +14,7 @@ const KEYS: Record<string, Action> = {
   KeyA: 'left',
   ArrowRight: 'right',
   KeyD: 'right',
-  Space: 'nitro',
+  Space: 'down',
   ShiftLeft: 'nitro',
   ShiftRight: 'nitro',
   KeyN: 'nitro',
