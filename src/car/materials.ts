@@ -13,7 +13,7 @@ import {
   SRGBColorSpace,
   type Texture,
 } from 'three';
-import { PAINT_ZONE_SLOTS, paintById, RIM_COLORS, VINYL_COLORS, type CarBuild, type PaintOption } from './parts';
+import { PAINT_ZONE_SLOTS, paintById, RIM_COLORS, vinylColorOf, type CarBuild, type PaintOption } from './parts';
 import { ZONE, ZONE_COUNT } from './zones';
 import { PAINT_GLSL } from './paintShader';
 
@@ -281,6 +281,22 @@ const VINYL_IDS: Record<string, number> = {
   livery: 9,
   pinstripe: 10,
   hex: 11,
+  aurora: 12,
+  magma: 13,
+  circuit: 14,
+  warp: 15,
+  prism: 16,
+};
+
+/**
+ * One clock for every car's animated vinyls. It reads the time when three
+ * uploads the uniform, so nothing has to tick it; it wraps every 20 minutes to
+ * keep float precision on phones.
+ */
+const PAINT_TIME = {
+  get value() {
+    return (performance.now() / 1000) % 1200;
+  },
 };
 
 const FINISH = { solid: 0, carbon: 1, flip: 2, well: 3 };
@@ -317,6 +333,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
     uZoneMat: { value: Array.from({ length: ZONE_COUNT }, () => new Vector4()) },
     uAccent: { value: new Color() },
     uVinyl: { value: 0 },
+    uTime: PAINT_TIME,
     uHood: { value: new Vector4(layout.hoodStart, layout.hoodEnd, 0.6, 0.6) },
     uNumber: { value: 7 },
     uDoor: { value: new Vector3(...(layout.doors ?? [0.84, -0.64, -0.98])) },
@@ -335,9 +352,10 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\nvarying vec3 vObjPos;\nvarying vec3 vObjN;\nflat varying int vZone;\n${PAINT_GLSL}`)
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\nfloat paintClearcoat = 1.0;\npaintSurface(diffuseColor.rgb, metalnessFactor, roughnessFactor, paintClearcoat, normal, normalize(vViewPosition));')
-      .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_CLEARCOAT\nmaterial.clearcoat *= paintClearcoat;\n#endif');
+      .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n#ifdef USE_CLEARCOAT\nmaterial.clearcoat *= paintClearcoat;\n#endif')
+      .replace('#include <aomap_fragment>', '#include <aomap_fragment>\ntotalEmissiveRadiance += paintGlow;');
   };
-  paint.customProgramCacheKey = () => 'hyperdrift-paint-v4';
+  paint.customProgramCacheKey = () => 'hyperdrift-paint-v5';
 
   const rim = new MeshStandardMaterial({ color: 0xd5dae0, roughness: 0.22, metalness: 1 });
   const tail = new MeshBasicMaterial({ color: new Color(1.5, 0.012, 0.02) });
@@ -383,8 +401,7 @@ export function createCarMaterials(build: CarBuild, layout: PaintLayout = { hood
       }
       uniforms.uZoneCol.value[ZONE.well].setRGB(0.012, 0.012, 0.014);
       uniforms.uZoneMat.value[ZONE.well].set(0, 0.85, 0, FINISH.well);
-      const vc = VINYL_COLORS.find((c) => c.id === b.vinylColor);
-      uniforms.uAccent.value.setHex(vc && vc.color >= 0 ? vc.color : base.accent);
+      uniforms.uAccent.value.setHex(vinylColorOf(b));
       uniforms.uVinyl.value = VINYL_IDS[b.vinyl] ?? 0;
       uniforms.uNumber.value = (hashBuild(b) % 98) + 1;
       // rims: stock colour per design, a chosen colour, or the body paint
