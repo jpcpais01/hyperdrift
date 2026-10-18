@@ -2,6 +2,7 @@ import { PATCH_NOTES } from '../patchNotes';
 import {
   optionsFor,
   paintById,
+  vinylColorOf,
   SUB_SLOTS,
   TECH_SLOTS,
   VISUAL_SLOTS,
@@ -658,7 +659,7 @@ export class GarageScreen {
     const dots = (subs ?? [{ slot }]).map((s) => this.swatchOf(s.slot, this.build[s.slot])).filter((x): x is string => !!x);
     // lights that are off have no colour to show
     const uniq = slot === 'underglow' && this.build.underglow === 'none' ? [] : [...new Set(dots)].slice(0, 4);
-    return { name: main?.name ?? '', dots: uniq };
+    return { name: main?.name ?? '', dots: uniq, rare: !!main?.rare };
   }
 
   private renderCats() {
@@ -673,7 +674,7 @@ export class GarageScreen {
         'cat',
         `<span class="cat-ico">${SLOT_ICONS[s.slot] ?? ''}</span><span class="cat-txt"><b>${esc(s.label)}</b><small>${esc(SLOT_HINTS[s.slot] ?? '')}</small></span><span class="cat-val">${f.dots
           .map((c) => `<i class="dot" style="background:${c}"></i>`)
-          .join('')}<em>${esc(f.name)}</em></span><span class="chev">›</span>`,
+          .join('')}<em${f.rare ? ' class="rare-name"' : ''}>${esc(f.name)}</em></span><span class="chev">›</span>`,
       );
       b.dataset.slot = s.slot;
       b.style.setProperty('--i', String(i));
@@ -725,7 +726,7 @@ export class GarageScreen {
     const cur = displayStats(computeStats(this.build));
     for (const o of opts) {
       const on = this.build[slot] === o.id;
-      const card = h('button', `opt${on ? ' on' : ''}`);
+      const card = h('button', `opt${on ? ' on' : ''}${o.rare ? ' rare' : ''}`);
       card.dataset.id = o.id;
       if (on) card.dataset.autofocus = '';
       const sw = this.swatchOf(slot, o.id);
@@ -738,7 +739,9 @@ export class GarageScreen {
         }).join('');
         deltas = deltas ? `<span class="deltas">${deltas}</span>` : '<span class="deltas"><span class="dl">Sem efeito nas barras</span></span>';
       }
-      card.innerHTML = `${sw ? `<i class="swatch" style="background:${sw}"></i>` : ''}<span class="opt-txt"><b>${esc(o.name)}</b><small>${esc(o.desc)}</small>${deltas}</span>${
+      const orb = o.rare ? `<i class="swatch rare-orb rare-${o.id}"></i>` : sw ? `<i class="swatch" style="background:${sw}"></i>` : '';
+      const tag = o.rare ? '<span class="rare-tag">✦ Raro · animado</span>' : '';
+      card.innerHTML = `${orb}<span class="opt-txt">${tag}<b>${esc(o.name)}</b><small>${esc(o.desc)}</small>${deltas}</span>${
         on ? '<em class="opt-on">Equipado</em>' : ''
       }`;
       card.addEventListener('click', () => {
@@ -765,7 +768,7 @@ export class GarageScreen {
       if (id === 'same') return paintById(this.build.paint).swatch ?? null;
       return null;
     }
-    if (slot === 'vinylColor' && id === 'auto') return '#' + paintById(this.build.paint).accent.toString(16).padStart(6, '0');
+    if (slot === 'vinylColor' && id === 'auto') return '#' + vinylColorOf({ ...this.build, vinylColor: 'auto' }).toString(16).padStart(6, '0');
     if ((slot === 'rimColor' && id === 'body') || (slot === 'underglowColor' && id === 'paint')) return paintById(this.build.paint).swatch ?? null;
     return o.swatch;
   }

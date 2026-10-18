@@ -222,6 +222,7 @@ function fragBody(kind: DamageKind): string {
       roughnessFactor = mix(roughnessFactor, 0.92, soot);
       metalnessFactor = mix(metalnessFactor, 0.1, soot);
       dmgCoat = 1.0 - max(primer, soot);
+      ${kind === 'paint' ? '#ifdef HD_PAINT_GLOW\n      paintGlow *= dmgCoat;\n      #endif' : ''}
     }`;
   }
   if (kind === 'glass') {
@@ -306,7 +307,7 @@ export function damaged<T extends Material>(base: T, u: DamageUniforms, kind: Da
     prev.call(base, shader, renderer);
     inject(shader, u, kind);
   };
-  mat.customProgramCacheKey = () => `${prevKey}|dmg-${kind}-v1`;
+  mat.customProgramCacheKey = () => `${prevKey}|dmg-${kind}-v2`;
   return mat;
 }
 

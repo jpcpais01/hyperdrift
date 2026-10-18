@@ -22,6 +22,8 @@ export interface PartOption {
   desc: string;
   /** CSS background for a colour chip in the garage */
   swatch?: string;
+  /** a rare part: gets its own badge and card in the garage, and rivals rarely roll it */
+  rare?: boolean;
 }
 
 export interface PaintOption extends PartOption {
@@ -201,8 +203,29 @@ export const VISUAL_PARTS: Record<GeoSlot | 'vinyl', PartOption[]> = {
     { id: 'livery', name: 'Competição', desc: 'Faixa diagonal e número de corrida.' },
     { id: 'pinstripe', name: 'Filetes', desc: 'Filetes finos ao longo das linhas.' },
     { id: 'hex', name: 'Favo', desc: 'Favo hexagonal nas partes de baixo.' },
+    { id: 'aurora', name: 'Aurora', desc: 'Cortinas de luz boreal que ondulam pela carroçaria.', rare: true },
+    { id: 'magma', name: 'Magma', desc: 'Crosta negra com veios de lava viva a escorrer para trás.', rare: true },
+    { id: 'circuit', name: 'Circuito', desc: 'Pistas de circuito com impulsos de luz a correr.', rare: true },
+    { id: 'warp', name: 'Hiperespaço', desc: 'O espaço profundo dentro da pintura, estrelas em dobra.', rare: true },
+    { id: 'prism', name: 'Prisma', desc: 'Holográfico: arco-íris em ondas e um varrimento de luz.', rare: true },
   ],
 };
+
+/** Each animated vinyl's own colour, used while the vinyl colour is on "Automática". */
+export const RARE_VINYL_COLORS: Record<string, number> = {
+  aurora: 0x2bffa0,
+  magma: 0xff4a0a,
+  circuit: 0x29e0ff,
+  warp: 0x9a7bff,
+  prism: 0xffffff,
+};
+
+/** The colour a vinyl is drawn in: the chosen one, the rare vinyl's own, or the paint's accent. */
+export function vinylColorOf(b: { vinyl: string; vinylColor: string; paint: string }): number {
+  const vc = VINYL_COLORS.find((c) => c.id === b.vinylColor);
+  if (vc && vc.color >= 0) return vc.color;
+  return RARE_VINYL_COLORS[b.vinyl] ?? paintById(b.paint).accent;
+}
 
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 
@@ -403,10 +426,15 @@ export function randomBuild(seed: number): CarBuild {
   const out = { ...DEFAULT_BUILD };
   for (const slot of ALL_SLOTS) {
     const opts = optionsFor(slot);
-    const pick = opts[Math.floor(rnd() * opts.length)].id;
+    let pick = opts[Math.floor(rnd() * opts.length)];
+    // rare parts stay rare on the grid
+    if (pick.rare && rnd() < 0.75) {
+      const common = opts.filter((o) => !o.rare);
+      pick = common[Math.floor(rnd() * common.length)];
+    }
     // keep AI cars mostly one colour: a contrasting part here and there looks deliberate, all of them looks random
     const keepDefault = (PAINT_ZONE_SLOTS as string[]).includes(slot) ? rnd() < 0.8 : slot === 'vinylColor' || slot === 'rimColor' ? rnd() < 0.5 : false;
-    out[slot] = keepDefault ? opts[0].id : pick;
+    out[slot] = keepDefault ? opts[0].id : pick.id;
   }
   return out;
 }

@@ -8,6 +8,7 @@ export const PATCH_NOTES: PatchNoteGroup[] = [
   {
     hour: '2026-10-18 00:00 UTC',
     entries: [
+      'Five rare animated vinyls in the paint shop, marked with a shimmering ✦ Raro badge: Aurora (northern-light curtains rippling down the flanks), Magma (black crust drifting over glowing rivers of lava), Circuito (circuit traces with pulses of light racing to the back), Hiperespaço (deep space with star streaks rushing past) and Prisma (holographic rainbow foil with a light scan sweeping nose to tail). They move and glow at night, fit every body and part, and scratch off with damage. Rivals only rarely show up wearing one.',
       'New keyboard layout on PC: Space is now the brake (hold it to reverse once stopped) and either Shift fires the nitro. S and the down arrow still brake, and N still fires nitro too. The controls list in the menu shows the new keys.',
     ],
   },
